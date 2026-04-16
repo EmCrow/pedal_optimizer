@@ -13,6 +13,10 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Persistent local state in `.pedal_architect_py_state.json`.
 - Adjustable UI `Font Size` preset dropdown (`Small`, `Medium`, `Large`, `XL`) with persisted selection.
 - Resizable split-panel layout so builder/settings columns scale with the window.
+- Drag pedals from bank to active chain and drag active pedals back to bank to remove.
+- Visual board canvas with draggable pedal images and click-drag cable routing into amp.
+- Only pedals connected by placed cables into the amp are used for final recommendations.
+- Color scheme presets: `Dark`, `Light`, `Sunset`, and `Ocean`.
 
 ## Run
 

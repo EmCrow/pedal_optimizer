@@ -417,6 +417,8 @@ ORDER_NOTE_PATTERNS = {
 
 STATE_FILE = Path(".pedal_architect_py_state.json")
 PEDAL_MIME_TYPE = "application/x-pedal-architect-pedal-id"
+PEDAL_SOURCE_MIME_TYPE = "application/x-pedal-architect-source"
+AMP_NODE_ID = "__amp__"
 FONT_PRESET_SPECS = [
     ("small", "Small", 12),
     ("medium", "Medium", 14),
@@ -424,23 +426,102 @@ FONT_PRESET_SPECS = [
     ("xl", "XL", 19),
 ]
 FONT_PRESETS = {key: {"label": label, "px": px} for key, label, px in FONT_PRESET_SPECS}
-
-
-class ReorderListWidget(QtWidgets.QListWidget):
-    orderChanged = QtCore.pyqtSignal()
-
-    def dropEvent(self, event):
-        super().dropEvent(event)
-        self.orderChanged.emit()
+THEME_PRESET_SPECS = [
+    ("dark", "Dark"),
+    ("light", "Light"),
+    ("sunset", "Sunset"),
+    ("ocean", "Ocean"),
+]
+THEMES = {
+    "dark": {
+        "bg": "#11161a",
+        "text": "#e9efe4",
+        "frame": "#3a464e",
+        "panel": "#161f25",
+        "tab": "#1d252b",
+        "tab_selected_bg": "#d6fd73",
+        "tab_selected_fg": "#1a230f",
+        "group_title": "#d6e2cb",
+        "canvas_bg": "#0f1418",
+        "canvas_grid": "#202b33",
+        "canvas_edge": "#86c7ff",
+        "canvas_edge_preview": "#86c7ff",
+        "amp_bg": "#232f38",
+        "amp_fg": "#f3f8f0",
+    },
+    "light": {
+        "bg": "#f5f6f8",
+        "text": "#21252b",
+        "frame": "#c0c7d1",
+        "panel": "#ffffff",
+        "tab": "#e7ebf0",
+        "tab_selected_bg": "#2f6feb",
+        "tab_selected_fg": "#ffffff",
+        "group_title": "#253347",
+        "canvas_bg": "#edf1f6",
+        "canvas_grid": "#d0d8e4",
+        "canvas_edge": "#1f6feb",
+        "canvas_edge_preview": "#1f6feb",
+        "amp_bg": "#d7e1ec",
+        "amp_fg": "#1f2f42",
+    },
+    "sunset": {
+        "bg": "#2a1d22",
+        "text": "#f7e8da",
+        "frame": "#7f4a53",
+        "panel": "#3a262d",
+        "tab": "#4a3038",
+        "tab_selected_bg": "#ffb347",
+        "tab_selected_fg": "#3a2523",
+        "group_title": "#ffcf97",
+        "canvas_bg": "#2e1d24",
+        "canvas_grid": "#5d3943",
+        "canvas_edge": "#ffd166",
+        "canvas_edge_preview": "#ffd166",
+        "amp_bg": "#5a3031",
+        "amp_fg": "#ffe9c4",
+    },
+    "ocean": {
+        "bg": "#0f2430",
+        "text": "#def1f6",
+        "frame": "#2f6172",
+        "panel": "#123544",
+        "tab": "#164454",
+        "tab_selected_bg": "#2ad4c5",
+        "tab_selected_fg": "#0f2831",
+        "group_title": "#a5e8df",
+        "canvas_bg": "#0d2a36",
+        "canvas_grid": "#235062",
+        "canvas_edge": "#6ee7ff",
+        "canvas_edge_preview": "#6ee7ff",
+        "amp_bg": "#1c4a5a",
+        "amp_fg": "#ddfbff",
+    },
+}
+PEDAL_COLORS = {
+    "cs3": "#74c46f",
+    "sd1": "#f7d242",
+    "bd2": "#4ea1ff",
+    "ds1": "#f48d35",
+    "ge7": "#a8a8a8",
+    "eq10": "#d9d1c9",
+    "ch1": "#56c8ef",
+    "dd3": "#5b69e3",
+    "rc30": "#b45261",
+}
 
 
 class PedalBankListWidget(QtWidgets.QListWidget):
+    chainPedalReturned = QtCore.pyqtSignal(str)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._drag_start_pos = QtCore.QPoint()
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.setAcceptDrops(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.DragOnly)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
         self.setDragDropOverwriteMode(False)
         self.setDefaultDropAction(QtCore.Qt.CopyAction)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -456,6 +537,7 @@ class PedalBankListWidget(QtWidgets.QListWidget):
         drag = QtGui.QDrag(self)
         mime = QtCore.QMimeData()
         mime.setData(PEDAL_MIME_TYPE, pedal_id.encode("utf-8"))
+        mime.setData(PEDAL_SOURCE_MIME_TYPE, b"bank")
         mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
         drag.setMimeData(mime)
         drag.exec_(QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.CopyAction)
@@ -477,12 +559,38 @@ class PedalBankListWidget(QtWidgets.QListWidget):
             self.setCurrentItem(item)
         self.startDrag(QtCore.Qt.CopyAction)
 
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
 
-class ChainListWidget(ReorderListWidget):
-    bankPedalDropped = QtCore.pyqtSignal(str, int)
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            super().dropEvent(event)
+            return
+        source = bytes(event.mimeData().data(PEDAL_SOURCE_MIME_TYPE)).decode("utf-8").strip() if event.mimeData().hasFormat(PEDAL_SOURCE_MIME_TYPE) else ""
+        if source == "chain":
+            pedal_id = bytes(event.mimeData().data(PEDAL_MIME_TYPE)).decode("utf-8").strip()
+            if pedal_id:
+                self.chainPedalReturned.emit(pedal_id)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+
+class ChainListWidget(QtWidgets.QListWidget):
+    pedalDropped = QtCore.pyqtSignal(str, int, str)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._drag_start_pos = QtCore.QPoint()
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
@@ -496,16 +604,46 @@ class ChainListWidget(ReorderListWidget):
     def supportedDropActions(self):
         return QtCore.Qt.CopyAction | QtCore.Qt.MoveAction
 
+    def startDrag(self, _supported_actions):
+        item = self.currentItem()
+        if not item:
+            return
+        pedal_id = item.data(QtCore.Qt.UserRole)
+        if not pedal_id:
+            return
+        drag = QtGui.QDrag(self)
+        mime = QtCore.QMimeData()
+        mime.setData(PEDAL_MIME_TYPE, pedal_id.encode("utf-8"))
+        mime.setData(PEDAL_SOURCE_MIME_TYPE, b"chain")
+        mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
+        drag.setMimeData(mime)
+        drag.exec_(QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.MoveAction)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & QtCore.Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < QtWidgets.QApplication.startDragDistance():
+            super().mouseMoveEvent(event)
+            return
+        item = self.itemAt(self._drag_start_pos)
+        if item:
+            self.setCurrentItem(item)
+            self.startDrag(QtCore.Qt.MoveAction)
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
-            event.setDropAction(QtCore.Qt.CopyAction)
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
-            event.setDropAction(QtCore.Qt.CopyAction)
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
@@ -513,15 +651,284 @@ class ChainListWidget(ReorderListWidget):
     def dropEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
             pedal_id = bytes(event.mimeData().data(PEDAL_MIME_TYPE)).decode("utf-8").strip()
+            source = bytes(event.mimeData().data(PEDAL_SOURCE_MIME_TYPE)).decode("utf-8").strip() if event.mimeData().hasFormat(PEDAL_SOURCE_MIME_TYPE) else "bank"
             if pedal_id:
                 row = self.indexAt(event.pos()).row()
                 if row < 0:
                     row = self.count()
-                self.bankPedalDropped.emit(pedal_id, row)
-            event.setDropAction(QtCore.Qt.CopyAction)
+                self.pedalDropped.emit(pedal_id, row, source or "bank")
             event.acceptProposedAction()
             return
         super().dropEvent(event)
+
+
+class PedalCanvasWidget(QtWidgets.QWidget):
+    pedalDropped = QtCore.pyqtSignal(str, QtCore.QPoint, str)
+    pedalMoved = QtCore.pyqtSignal(str, QtCore.QPoint)
+    connectionCreated = QtCore.pyqtSignal(str, str)
+    pedalDoubleClicked = QtCore.pyqtSignal(str)
+
+    PEDAL_SIZE = QtCore.QSize(126, 186)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMinimumSize(380, 280)
+        self.setMouseTracking(True)
+        self.pedal_ids = []
+        self.pedal_positions = {}
+        self.connections = []
+        self.amp_label = "AMP"
+        self.theme = THEMES["dark"]
+        self.dragging_pedal = None
+        self.drag_offset = QtCore.QPoint()
+        self.link_start = None
+        self.preview_link_to = None
+
+    def set_theme(self, theme):
+        self.theme = theme
+        self.update()
+
+    def set_board_data(self, pedal_ids, positions, connections, amp_label):
+        self.pedal_ids = list(pedal_ids)
+        clean_positions = {}
+        for pedal_id in self.pedal_ids:
+            raw = positions.get(pedal_id, [18, 18])
+            clean_positions[pedal_id] = self.clamp_pedal_position(QtCore.QPoint(int(raw[0]), int(raw[1])))
+        self.pedal_positions = clean_positions
+        self.connections = list(connections)
+        self.amp_label = amp_label or "AMP"
+        self.update()
+
+    def amp_rect(self):
+        width = 156
+        height = 190
+        x = max(16, self.width() - width - 20)
+        y = max(12, (self.height() - height) // 2)
+        return QtCore.QRect(x, y, width, height)
+
+    def amp_input_pos(self):
+        rect = self.amp_rect()
+        return QtCore.QPoint(rect.left(), rect.center().y())
+
+    def pedal_rect(self, pedal_id):
+        position = self.pedal_positions.get(pedal_id, QtCore.QPoint(16, 16))
+        return QtCore.QRect(position, self.PEDAL_SIZE)
+
+    def pedal_input_pos(self, pedal_id):
+        rect = self.pedal_rect(pedal_id)
+        return QtCore.QPoint(rect.left(), rect.center().y())
+
+    def pedal_output_pos(self, pedal_id):
+        rect = self.pedal_rect(pedal_id)
+        return QtCore.QPoint(rect.right(), rect.center().y())
+
+    def clamp_pedal_position(self, point):
+        amp_left = self.amp_rect().left()
+        max_x = min(max(14, self.width() - self.PEDAL_SIZE.width() - 14), amp_left - self.PEDAL_SIZE.width() - 24)
+        if max_x < 14:
+            max_x = 14
+        max_y = max(14, self.height() - self.PEDAL_SIZE.height() - 14)
+        return QtCore.QPoint(clamp(point.x(), 14, max_x), clamp(point.y(), 14, max_y))
+
+    def pedal_at(self, point):
+        for pedal_id in reversed(self.pedal_ids):
+            if self.pedal_rect(pedal_id).contains(point):
+                return pedal_id
+        return None
+
+    def jack_hit(self, point, center, radius=11):
+        dx = point.x() - center.x()
+        dy = point.y() - center.y()
+        return (dx * dx + dy * dy) <= (radius * radius)
+
+    def find_input_target(self, point):
+        if self.jack_hit(point, self.amp_input_pos(), 14):
+            return AMP_NODE_ID
+        for pedal_id in reversed(self.pedal_ids):
+            if self.jack_hit(point, self.pedal_input_pos(pedal_id), 12):
+                return pedal_id
+        return None
+
+    def draw_link(self, painter, start, end, color, width=3, dashed=False):
+        path = QtGui.QPainterPath()
+        path.moveTo(start)
+        delta = max(42, abs(end.x() - start.x()) // 2)
+        c1 = QtCore.QPoint(start.x() + delta, start.y())
+        c2 = QtCore.QPoint(end.x() - delta, end.y())
+        path.cubicTo(c1, c2, end)
+        pen = QtGui.QPen(QtGui.QColor(color), width, QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawPath(path)
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.fillRect(self.rect(), QtGui.QColor(self.theme["canvas_bg"]))
+
+        grid_pen = QtGui.QPen(QtGui.QColor(self.theme["canvas_grid"]), 1)
+        painter.setPen(grid_pen)
+        step = 28
+        for x in range(0, self.width(), step):
+            painter.drawLine(x, 0, x, self.height())
+        for y in range(0, self.height(), step):
+            painter.drawLine(0, y, self.width(), y)
+
+        amp_rect = self.amp_rect()
+        painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["amp_bg"])))
+        painter.drawRoundedRect(amp_rect, 14, 14)
+        painter.setPen(QtGui.QColor(self.theme["amp_fg"]))
+        amp_font = painter.font()
+        amp_font.setBold(True)
+        amp_font.setPointSize(max(9, amp_font.pointSize()))
+        painter.setFont(amp_font)
+        painter.drawText(amp_rect.adjusted(10, 12, -10, -10), QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, self.amp_label)
+        speaker_rect = amp_rect.adjusted(24, 58, -24, -18)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#1b1f22"), 2))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#24292f")))
+        painter.drawRoundedRect(speaker_rect, 10, 10)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#3a434a"), 1))
+        painter.drawEllipse(speaker_rect.center(), 32, 32)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#e8edf1")))
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.drawEllipse(self.amp_input_pos(), 7, 7)
+
+        for src, dst in self.connections:
+            if src not in self.pedal_ids:
+                continue
+            if dst != AMP_NODE_ID and dst not in self.pedal_ids:
+                continue
+            start = self.pedal_output_pos(src)
+            end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
+            self.draw_link(painter, start, end, self.theme["canvas_edge"], width=3)
+
+        if self.link_start and self.link_start in self.pedal_ids and self.preview_link_to:
+            self.draw_link(
+                painter,
+                self.pedal_output_pos(self.link_start),
+                self.preview_link_to,
+                self.theme["canvas_edge_preview"],
+                width=2,
+                dashed=True,
+            )
+
+        for pedal_id in self.pedal_ids:
+            rect = self.pedal_rect(pedal_id)
+            base = QtGui.QColor(PEDAL_COLORS.get(pedal_id, "#b0b0b0"))
+            shade = base.darker(126)
+            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
+            gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
+            gradient.setColorAt(0.0, base.lighter(128))
+            gradient.setColorAt(1.0, shade)
+            painter.setBrush(QtGui.QBrush(gradient))
+            painter.drawRoundedRect(rect, 12, 12)
+
+            title_rect = rect.adjusted(8, 8, -8, -8)
+            painter.setPen(QtGui.QColor("#15181c"))
+            title_font = painter.font()
+            title_font.setBold(True)
+            title_font.setPointSize(max(8, title_font.pointSize() - 1))
+            painter.setFont(title_font)
+            painter.drawText(title_rect, QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, PEDAL_LIBRARY[pedal_id])
+
+            for idx, label in enumerate(["L", "T", "G"]):
+                cx = rect.left() + 30 + idx * 33
+                cy = rect.top() + 68
+                painter.setBrush(QtGui.QBrush(QtGui.QColor("#f4f4f4")))
+                painter.setPen(QtGui.QPen(QtGui.QColor("#22282e"), 1))
+                painter.drawEllipse(QtCore.QPoint(cx, cy), 11, 11)
+                painter.setPen(QtGui.QPen(QtGui.QColor("#c42a2a"), 2))
+                painter.drawLine(cx, cy, cx, cy - 8)
+                painter.setPen(QtGui.QColor("#0d1117"))
+                painter.drawText(cx - 4, cy + 20, label)
+
+            switch_rect = QtCore.QRect(rect.left() + 38, rect.bottom() - 48, rect.width() - 76, 30)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#20252b"), 2))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor("#d4d7dd")))
+            painter.drawRoundedRect(switch_rect, 8, 8)
+            painter.setBrush(QtGui.QBrush(QtGui.QColor("#f0f4f8")))
+            painter.drawEllipse(self.pedal_input_pos(pedal_id), 6, 6)
+            painter.drawEllipse(self.pedal_output_pos(pedal_id), 6, 6)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            super().dropEvent(event)
+            return
+        pedal_id = bytes(event.mimeData().data(PEDAL_MIME_TYPE)).decode("utf-8").strip()
+        source = bytes(event.mimeData().data(PEDAL_SOURCE_MIME_TYPE)).decode("utf-8").strip() if event.mimeData().hasFormat(PEDAL_SOURCE_MIME_TYPE) else "bank"
+        if pedal_id:
+            self.pedalDropped.emit(pedal_id, self.clamp_pedal_position(event.pos()), source or "bank")
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def mousePressEvent(self, event):
+        if event.button() != QtCore.Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        click_pos = event.pos()
+        for pedal_id in reversed(self.pedal_ids):
+            if self.jack_hit(click_pos, self.pedal_output_pos(pedal_id), 12):
+                self.link_start = pedal_id
+                self.preview_link_to = click_pos
+                self.update()
+                return
+        pedal_id = self.pedal_at(click_pos)
+        if pedal_id:
+            self.dragging_pedal = pedal_id
+            self.drag_offset = click_pos - self.pedal_positions[pedal_id]
+        else:
+            self.dragging_pedal = None
+
+    def mouseMoveEvent(self, event):
+        if self.link_start:
+            self.preview_link_to = event.pos()
+            self.update()
+            return
+        if self.dragging_pedal:
+            new_pos = self.clamp_pedal_position(event.pos() - self.drag_offset)
+            self.pedal_positions[self.dragging_pedal] = new_pos
+            self.update()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton and self.link_start:
+            target = self.find_input_target(event.pos())
+            if target and target != self.link_start:
+                self.connectionCreated.emit(self.link_start, target)
+            self.link_start = None
+            self.preview_link_to = None
+            self.update()
+            return
+        if event.button() == QtCore.Qt.LeftButton and self.dragging_pedal:
+            pedal_id = self.dragging_pedal
+            self.dragging_pedal = None
+            self.pedalMoved.emit(pedal_id, self.pedal_positions.get(pedal_id, QtCore.QPoint(18, 18)))
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        pedal_id = self.pedal_at(event.pos())
+        if pedal_id:
+            self.pedalDoubleClicked.emit(pedal_id)
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 def clamp(value, min_value, max_value):
@@ -537,6 +944,10 @@ def font_pixels_for_preset(preset_key):
 def nearest_font_preset(pixel_size):
     safe_size = clamp(int(round(pixel_size)), 10, 30)
     return min(FONT_PRESET_SPECS, key=lambda spec: abs(spec[2] - safe_size))[0]
+
+
+def theme_for_key(theme_key):
+    return THEMES.get(theme_key, THEMES["dark"])
 
 
 def sanitize_chain(chain):
@@ -865,8 +1276,12 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarProfile": AUTO_GUITAR_PROFILE_BY_TYPE["electric"],
             "ampModel": "auto",
             "fontPreset": "medium",
+            "theme": "dark",
             "chain": list(DEFAULT_CHAIN),
+            "canvasPositions": {},
+            "canvasConnections": [],
         }
+        self.connected_chain = []
 
         self._loading_ui = False
         self.load_state()
@@ -899,7 +1314,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def initialize_splitter_sizes(self):
         if hasattr(self, "builder_splitter"):
-            self.builder_splitter.setSizes([280, 420, 580])
+            self.builder_splitter.setSizes([320, 560, 520])
         if hasattr(self, "settings_splitter"):
             self.settings_splitter.setSizes([320, 320, 320, 420])
 
@@ -922,6 +1337,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_profile_combo = QtWidgets.QComboBox()
         self.amp_combo = QtWidgets.QComboBox()
         self.font_size_combo = QtWidgets.QComboBox()
+        self.theme_combo = QtWidgets.QComboBox()
         self.font_size_combo.setView(QtWidgets.QListView())
 
         self.add_labeled_control(control_grid, 0, 0, "Style", self.genre_combo)
@@ -929,8 +1345,11 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.add_labeled_control(control_grid, 0, 2, "Guitar Controls", self.guitar_profile_combo)
         self.add_labeled_control(control_grid, 1, 0, "Amp", self.amp_combo)
         self.add_labeled_control(control_grid, 1, 1, "Font Size", self.font_size_combo)
+        self.add_labeled_control(control_grid, 1, 2, "Color Scheme", self.theme_combo)
 
         self.optimize_btn = QtWidgets.QPushButton("Optimize For Me")
+        self.auto_wire_btn = QtWidgets.QPushButton("Auto Wire")
+        self.clear_cables_btn = QtWidgets.QPushButton("Clear Cables")
         self.reset_btn = QtWidgets.QPushButton("Reset Chain")
         self.save_btn = QtWidgets.QPushButton("Save Offline")
 
@@ -938,6 +1357,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         action_row.setSpacing(10)
         action_row.addStretch(1)
         action_row.addWidget(self.optimize_btn)
+        action_row.addWidget(self.auto_wire_btn)
+        action_row.addWidget(self.clear_cables_btn)
         action_row.addWidget(self.reset_btn)
         action_row.addWidget(self.save_btn)
         controls_layout.addLayout(action_row)
@@ -950,25 +1371,34 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.bank_list.setAlternatingRowColors(True)
         self.bank_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         bank_layout.addWidget(self.bank_list)
-        bank_hint = QtWidgets.QLabel("Drag pedals from this bank into the Signal Chain panel.")
+        bank_hint = QtWidgets.QLabel("Drag pedals from bank into Active Pedals or directly onto the Board Canvas.")
         bank_hint.setWordWrap(True)
         bank_layout.addWidget(bank_hint)
-
-        chain_group = QtWidgets.QGroupBox("Signal Chain")
-        chain_layout = QtWidgets.QVBoxLayout(chain_group)
+        bank_layout.addWidget(QtWidgets.QLabel("Active Pedals"))
         self.chain_list = ChainListWidget()
         self.chain_list.setAlternatingRowColors(True)
+        self.chain_list.setMinimumHeight(170)
         self.chain_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        chain_layout.addWidget(self.chain_list)
+        bank_layout.addWidget(self.chain_list)
+        remove_btn = QtWidgets.QPushButton("Remove Selected Pedal")
+        bank_layout.addWidget(remove_btn)
+        self.remove_chain_btn = remove_btn
+
+        board_group = QtWidgets.QGroupBox("Board Canvas")
+        board_layout = QtWidgets.QVBoxLayout(board_group)
+        self.board_canvas = PedalCanvasWidget()
+        board_layout.addWidget(self.board_canvas, 1)
+        board_hint = QtWidgets.QLabel(
+            "Click-hold from a pedal output jack and release on the next pedal input jack (or amp) to create chain cables."
+        )
+        board_hint.setWordWrap(True)
+        board_layout.addWidget(board_hint)
         self.chain_score = QtWidgets.QLabel("Tone Match: --")
         self.chain_summary = QtWidgets.QLabel("")
         self.chain_summary.setWordWrap(True)
         self.chain_score.setStyleSheet("font-weight: 700;")
-        chain_layout.addWidget(self.chain_score)
-        chain_layout.addWidget(self.chain_summary)
-        remove_btn = QtWidgets.QPushButton("Remove Selected Pedal")
-        chain_layout.addWidget(remove_btn)
-        self.remove_chain_btn = remove_btn
+        board_layout.addWidget(self.chain_score)
+        board_layout.addWidget(self.chain_summary)
 
         right_group = QtWidgets.QGroupBox("Guitar + Amp")
         right_layout = QtWidgets.QVBoxLayout(right_group)
@@ -991,16 +1421,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         right_layout.addWidget(QtWidgets.QLabel("Style Playbook"))
         right_layout.addWidget(self.playbook_preview, 2)
 
-        for panel in [bank_group, chain_group, right_group]:
+        for panel in [bank_group, board_group, right_group]:
             panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         self.builder_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.builder_splitter.addWidget(bank_group)
-        self.builder_splitter.addWidget(chain_group)
+        self.builder_splitter.addWidget(board_group)
         self.builder_splitter.addWidget(right_group)
         self.builder_splitter.setChildrenCollapsible(False)
         self.builder_splitter.setStretchFactor(0, 2)
-        self.builder_splitter.setStretchFactor(1, 3)
+        self.builder_splitter.setStretchFactor(1, 4)
         self.builder_splitter.setStretchFactor(2, 4)
         layout.addWidget(self.builder_splitter, 1)
 
@@ -1064,16 +1494,23 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_profile_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.amp_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.font_size_combo.currentIndexChanged.connect(self.on_font_preset_changed)
+        self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
 
         self.optimize_btn.clicked.connect(self.optimize_chain)
+        self.auto_wire_btn.clicked.connect(self.auto_wire_active_pedals)
+        self.clear_cables_btn.clicked.connect(self.clear_cables)
         self.reset_btn.clicked.connect(self.reset_chain)
         self.save_btn.clicked.connect(self.persist_state)
 
         self.bank_list.itemDoubleClicked.connect(self.add_selected_bank_item)
         self.chain_list.itemDoubleClicked.connect(self.remove_selected_chain_item)
-        self.chain_list.orderChanged.connect(self.chain_reordered)
-        self.chain_list.bankPedalDropped.connect(self.insert_pedal_into_chain)
+        self.chain_list.pedalDropped.connect(self.insert_pedal_into_chain)
+        self.bank_list.chainPedalReturned.connect(self.return_chain_pedal_to_bank)
         self.remove_chain_btn.clicked.connect(self.remove_selected_chain_item)
+        self.board_canvas.pedalDropped.connect(self.on_canvas_pedal_dropped)
+        self.board_canvas.pedalMoved.connect(self.on_canvas_pedal_moved)
+        self.board_canvas.connectionCreated.connect(self.on_canvas_connection_created)
+        self.board_canvas.pedalDoubleClicked.connect(self.on_canvas_pedal_double_clicked)
 
     def populate_controls(self):
         self._loading_ui = True
@@ -1096,6 +1533,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for amp_key, amp in AMP_MODELS.items():
             self.amp_combo.addItem(amp["label"], amp_key)
 
+        self.theme_combo.clear()
+        for theme_key, label in THEME_PRESET_SPECS:
+            self.theme_combo.addItem(label, theme_key)
+
         self.font_size_combo.clear()
         for preset_key, label, pixel_size in FONT_PRESET_SPECS:
             row = self.font_size_combo.count()
@@ -1108,6 +1549,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.set_combo_by_data(self.guitar_type_combo, self.state["guitarType"])
         self.set_combo_by_data(self.guitar_profile_combo, self.state["guitarProfile"])
         self.set_combo_by_data(self.amp_combo, self.state["ampModel"])
+        if not self.set_combo_by_data(self.theme_combo, self.state.get("theme", "dark")):
+            self.set_combo_by_data(self.theme_combo, "dark")
         if not self.set_combo_by_data(self.font_size_combo, self.state.get("fontPreset", "medium")):
             self.set_combo_by_data(self.font_size_combo, "medium")
 
@@ -1152,6 +1595,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.apply_theme()
         self.persist_state(silent=True)
 
+    def on_theme_changed(self):
+        if self._loading_ui:
+            return
+        theme_key = self.theme_combo.currentData()
+        if theme_key not in THEMES:
+            theme_key = "dark"
+        self.state["theme"] = theme_key
+        self.apply_theme()
+        self.persist_state(silent=True)
+
     def update_bank_list(self):
         self.bank_list.clear()
         chain_set = set(self.state["chain"])
@@ -1174,23 +1627,68 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for pedal_id in self.state["chain"]:
             item = QtWidgets.QListWidgetItem(PEDAL_LIBRARY[pedal_id])
             item.setData(QtCore.Qt.UserRole, pedal_id)
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+            item.setFlags(
+                (item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+                & ~QtCore.Qt.ItemIsDropEnabled
+            )
             self.chain_list.addItem(item)
         self.chain_list.blockSignals(False)
 
-    def chain_reordered(self):
-        self.state["chain"] = self.current_chain_from_widget()
-        self.render_all()
-        self.persist_state(silent=True)
+    def default_canvas_position_for(self, pedal_id):
+        chain = list(self.state["chain"])
+        index = chain.index(pedal_id) if pedal_id in chain else len(chain)
+        col_count = max(1, (self.board_canvas.width() - 220) // 160)
+        col = index % col_count
+        row = index // col_count
+        x = 24 + col * 150
+        y = 24 + row * 200
+        return self.board_canvas.clamp_pedal_position(QtCore.QPoint(x, y))
 
-    def current_chain_from_widget(self):
-        chain = []
-        for i in range(self.chain_list.count()):
-            item = self.chain_list.item(i)
-            pedal_id = item.data(QtCore.Qt.UserRole)
-            if pedal_id:
-                chain.append(pedal_id)
-        return sanitize_chain(chain)
+    def sanitize_canvas_connections(self, active_chain):
+        active_set = set(active_chain)
+        cleaned = []
+        seen = set()
+        for entry in self.state.get("canvasConnections", []):
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            src = str(entry[0])
+            dst = str(entry[1])
+            if src not in active_set:
+                continue
+            if dst != AMP_NODE_ID and dst not in active_set:
+                continue
+            if src == dst:
+                continue
+            key = (src, dst)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append([src, dst])
+        self.state["canvasConnections"] = cleaned
+
+    def ensure_canvas_state(self, focus_pedal=None, focus_pos=None):
+        chain = sanitize_chain(self.state["chain"])
+        self.state["chain"] = chain
+        positions = self.state.setdefault("canvasPositions", {})
+        for pedal_id in chain:
+            if pedal_id == focus_pedal and focus_pos is not None:
+                clamped = self.board_canvas.clamp_pedal_position(focus_pos)
+                positions[pedal_id] = [clamped.x(), clamped.y()]
+            elif pedal_id not in positions:
+                default_pos = self.default_canvas_position_for(pedal_id)
+                positions[pedal_id] = [default_pos.x(), default_pos.y()]
+            else:
+                raw = positions[pedal_id]
+                if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+                    default_pos = self.default_canvas_position_for(pedal_id)
+                    positions[pedal_id] = [default_pos.x(), default_pos.y()]
+                else:
+                    clamped = self.board_canvas.clamp_pedal_position(QtCore.QPoint(int(raw[0]), int(raw[1])))
+                    positions[pedal_id] = [clamped.x(), clamped.y()]
+        for pedal_id in list(positions.keys()):
+            if pedal_id not in chain:
+                positions.pop(pedal_id, None)
+        self.sanitize_canvas_connections(chain)
 
     def add_selected_bank_item(self, item=None):
         item = item or self.bank_list.currentItem()
@@ -1199,18 +1697,26 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         pedal_id = item.data(QtCore.Qt.UserRole)
         if not pedal_id:
             return
-        if pedal_id in self.state["chain"]:
+        chain = list(self.state["chain"])
+        if pedal_id in chain:
             return
-        self.state["chain"].append(pedal_id)
+        chain.append(pedal_id)
+        self.state["chain"] = chain
+        self.ensure_canvas_state(pedal_id)
         self.render_all()
         self.persist_state(silent=True)
 
-    def insert_pedal_into_chain(self, pedal_id, row):
+    def insert_pedal_into_chain(self, pedal_id, row, source="bank"):
         if pedal_id not in PEDAL_LIBRARY:
             return
         chain = list(self.state["chain"])
         row = clamp(int(row), 0, len(chain))
-        if pedal_id in chain:
+        if source == "chain" and pedal_id in chain:
+            old_index = chain.index(pedal_id)
+            chain.pop(old_index)
+            if old_index < row:
+                row -= 1
+        elif pedal_id in chain:
             old_index = chain.index(pedal_id)
             chain.pop(old_index)
             if old_index < row:
@@ -1218,6 +1724,15 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         row = clamp(int(row), 0, len(chain))
         chain.insert(row, pedal_id)
         self.state["chain"] = sanitize_chain(chain)
+        self.ensure_canvas_state(pedal_id)
+        self.render_all()
+        self.persist_state(silent=True)
+
+    def return_chain_pedal_to_bank(self, pedal_id):
+        if pedal_id not in self.state["chain"]:
+            return
+        self.state["chain"] = [pid for pid in self.state["chain"] if pid != pedal_id]
+        self.ensure_canvas_state()
         self.render_all()
         self.persist_state(silent=True)
 
@@ -1226,16 +1741,137 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if not item:
             return
         pedal_id = item.data(QtCore.Qt.UserRole)
-        if pedal_id in self.state["chain"]:
-            self.state["chain"].remove(pedal_id)
+        self.return_chain_pedal_to_bank(pedal_id)
+
+    def on_canvas_pedal_dropped(self, pedal_id, pos, source):
+        if pedal_id not in PEDAL_LIBRARY:
+            return
+        if pedal_id not in self.state["chain"]:
+            self.state["chain"].append(pedal_id)
+        self.ensure_canvas_state(pedal_id, pos)
+        if source == "chain":
+            self.state["chain"] = [pid for pid in self.state["chain"] if pid != pedal_id] + [pedal_id]
+        self.render_all()
+        self.persist_state(silent=True)
+
+    def on_canvas_pedal_moved(self, pedal_id, pos):
+        if pedal_id not in self.state["chain"]:
+            return
+        clamped = self.board_canvas.clamp_pedal_position(pos)
+        self.state.setdefault("canvasPositions", {})[pedal_id] = [clamped.x(), clamped.y()]
+        self.board_canvas.set_board_data(
+            self.state["chain"],
+            self.state.get("canvasPositions", {}),
+            self.state.get("canvasConnections", []),
+            "AMP",
+        )
+        self.persist_state(silent=True)
+
+    def introduces_cycle(self, connections):
+        outgoing = {}
+        for src, dst in connections:
+            if dst == AMP_NODE_ID:
+                continue
+            outgoing[src] = dst
+        for start in outgoing:
+            seen = set()
+            cursor = start
+            while cursor in outgoing:
+                if cursor in seen:
+                    return True
+                seen.add(cursor)
+                cursor = outgoing[cursor]
+        return False
+
+    def on_canvas_connection_created(self, src, dst):
+        if src not in self.state["chain"]:
+            return
+        if dst != AMP_NODE_ID and dst not in self.state["chain"]:
+            return
+        if src == dst:
+            return
+        connections = [tuple(item) for item in self.state.get("canvasConnections", []) if len(item) == 2]
+        connections = [(s, d) for (s, d) in connections if s != src]
+        if dst != AMP_NODE_ID:
+            connections = [(s, d) for (s, d) in connections if d != dst]
+        candidate = connections + [(src, dst)]
+        if self.introduces_cycle(candidate):
+            QtWidgets.QMessageBox.warning(self, "Cable Loop Blocked", "That cable would create a signal loop. Try a different target.")
+            return
+        self.state["canvasConnections"] = [[s, d] for s, d in candidate]
+        self.render_all()
+        self.persist_state(silent=True)
+
+    def on_canvas_pedal_double_clicked(self, pedal_id):
+        self.return_chain_pedal_to_bank(pedal_id)
+
+    def compute_connected_chain(self):
+        active_set = set(self.state["chain"])
+        connections = []
+        for item in self.state.get("canvasConnections", []):
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+            src = str(item[0])
+            dst = str(item[1])
+            if src not in active_set:
+                continue
+            if dst != AMP_NODE_ID and dst not in active_set:
+                continue
+            connections.append((src, dst))
+        incoming = {}
+        for src, dst in connections:
+            if dst != AMP_NODE_ID:
+                incoming[dst] = src
+        candidates = [src for src, dst in connections if dst == AMP_NODE_ID]
+        best = []
+        for end in candidates:
+            path = [end]
+            seen = {end}
+            cursor = end
+            while cursor in incoming:
+                prev = incoming[cursor]
+                if prev in seen:
+                    break
+                seen.add(prev)
+                path.append(prev)
+                cursor = prev
+            ordered = list(reversed(path))
+            if len(ordered) > len(best):
+                best = ordered
+        return sanitize_chain(best)
+
+    def auto_wire_active_pedals(self):
+        chain = sanitize_chain(self.state["chain"])
+        if not chain:
+            self.state["canvasConnections"] = []
             self.render_all()
             self.persist_state(silent=True)
+            return
+        auto_connections = []
+        for idx in range(len(chain) - 1):
+            auto_connections.append([chain[idx], chain[idx + 1]])
+        auto_connections.append([chain[-1], AMP_NODE_ID])
+        self.state["canvasConnections"] = auto_connections
+        self.render_all()
+        self.persist_state(silent=True)
+
+    def clear_cables(self):
+        self.state["canvasConnections"] = []
+        self.render_all()
+        self.persist_state(silent=True)
 
     def optimize_chain(self):
         preset = GENRE_PRESETS[self.state["genre"]]
         seed = self.state["chain"] if self.state["chain"] else preset["optimized_chain"]
         analysis = run_order_lab(self.state["genre"], seed, self.state["guitarType"])
         self.state["chain"] = sanitize_chain(analysis["best_chain"])
+        self.ensure_canvas_state()
+        auto_connections = []
+        for idx in range(len(self.state["chain"]) - 1):
+            auto_connections.append([self.state["chain"][idx], self.state["chain"][idx + 1]])
+        if self.state["chain"]:
+            auto_connections.append([self.state["chain"][-1], AMP_NODE_ID])
+        self.state["canvasConnections"] = auto_connections
         self.render_all()
         self.persist_state(silent=True)
         QtWidgets.QMessageBox.information(
@@ -1246,15 +1882,24 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def reset_chain(self):
         self.state["chain"] = list(DEFAULT_CHAIN)
+        self.ensure_canvas_state()
+        auto_connections = []
+        for idx in range(len(self.state["chain"]) - 1):
+            auto_connections.append([self.state["chain"][idx], self.state["chain"][idx + 1]])
+        if self.state["chain"]:
+            auto_connections.append([self.state["chain"][-1], AMP_NODE_ID])
+        self.state["canvasConnections"] = auto_connections
         self.render_all()
         self.persist_state(silent=True)
 
     def render_all(self):
         self.state["chain"] = sanitize_chain(self.state["chain"])
+        self.ensure_canvas_state()
+        self.connected_chain = self.compute_connected_chain()
 
         recommendation = build_recommendation(
             self.state["genre"],
-            self.state["chain"],
+            self.connected_chain,
             self.state["guitarType"],
             self.state["ampModel"],
             self.state["guitarProfile"],
@@ -1262,10 +1907,18 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
         self.update_bank_list()
         self.update_chain_list()
+        self.board_canvas.set_board_data(
+            self.state["chain"],
+            self.state.get("canvasPositions", {}),
+            self.state.get("canvasConnections", []),
+            recommendation["amp_label"],
+        )
 
-        tone_match = self.calculate_tone_match(self.state["chain"], recommendation["optimized_chain"])
+        tone_match = self.calculate_tone_match(self.connected_chain, recommendation["optimized_chain"])
         self.chain_score.setText(f"Tone Match: {tone_match}%")
-        self.chain_summary.setText(self.chain_to_text(self.state["chain"]))
+        active_text = ", ".join(PEDAL_LIBRARY[pid] for pid in self.state["chain"]) if self.state["chain"] else "(none)"
+        connected_text = self.chain_to_text(self.connected_chain)
+        self.chain_summary.setText(f"Connected chain: {connected_text}\nActive pedals: {active_text}")
 
         self.render_builder_preview(recommendation)
         self.render_settings_tab(recommendation)
@@ -1314,10 +1967,15 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def render_settings_tab(self, recommendation):
         pedal_lines = []
-        for pedal_id in self.state["chain"]:
+        for pedal_id in self.connected_chain:
             pedal_settings = recommendation["pedals"].get(pedal_id, {})
             pedal_lines.append(self.format_pedal_block(pedal_id, pedal_settings))
-        self.pedals_settings_text.setPlainText("\n\n".join(pedal_lines) if pedal_lines else "No pedals in chain.")
+        if pedal_lines:
+            self.pedals_settings_text.setPlainText("\n\n".join(pedal_lines))
+        else:
+            self.pedals_settings_text.setPlainText(
+                "No connected signal chain yet.\nAdd pedals to Active Pedals, then cable them on the Board Canvas into the amp."
+            )
 
         guitar = recommendation.get("guitar")
         if guitar:
@@ -1401,15 +2059,18 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def render_summary_tab(self, recommendation):
         amp = recommendation["amp"]
+        unpatched = [pid for pid in self.state["chain"] if pid not in self.connected_chain]
         bullets = [
             f"- Style: {recommendation['label']}",
             f"- Guitar: {'Acoustic' if self.state['guitarType'] == 'acoustic' else 'Electric'} | Profile: {recommendation['guitar']['label'] if recommendation.get('guitar') else 'Default'}",
             f"- Amp: {recommendation['amp_label']} ({amp.get('voicing', 'Custom')})",
             f"- Amp Dial: Gain {quick_knob(amp['gain'])}, Bass {quick_knob(amp['bass'])}, Mid {quick_knob(amp['mid'])}, Treble {quick_knob(amp['treble'])}, Presence {quick_knob(amp['presence'])}, Master {quick_knob(amp['master'])}",
-            f"- Signal Chain: {self.chain_to_text(self.state['chain'])}",
+            f"- Signal Chain: {self.chain_to_text(self.connected_chain)}",
         ]
-        for pedal_id in self.state["chain"]:
+        for pedal_id in self.connected_chain:
             bullets.append(f"- {PEDAL_LIBRARY[pedal_id]} active in chain")
+        if unpatched:
+            bullets.append("- Not currently chained to amp: " + ", ".join(PEDAL_LIBRARY[pid] for pid in unpatched))
 
         self.summary_text.setPlainText("\n".join(bullets))
 
@@ -1462,6 +2123,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if amp_model == "auto" or amp_model in AMP_MODELS:
             self.state["ampModel"] = amp_model
 
+        theme_key = payload.get("theme")
+        if theme_key in THEMES:
+            self.state["theme"] = theme_key
+
         font_preset = payload.get("fontPreset")
         if font_preset in FONT_PRESETS:
             self.state["fontPreset"] = font_preset
@@ -1474,15 +2139,37 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if isinstance(chain, list):
             self.state["chain"] = sanitize_chain(chain)
 
+        canvas_positions = payload.get("canvasPositions")
+        if isinstance(canvas_positions, dict):
+            clean_positions = {}
+            for key, value in canvas_positions.items():
+                if key in PEDAL_LIBRARY and isinstance(value, (list, tuple)) and len(value) == 2:
+                    clean_positions[key] = [int(value[0]), int(value[1])]
+            self.state["canvasPositions"] = clean_positions
+
+        canvas_connections = payload.get("canvasConnections")
+        if isinstance(canvas_connections, list):
+            clean_connections = []
+            for item in canvas_connections:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    src = str(item[0])
+                    dst = str(item[1])
+                    if src in PEDAL_LIBRARY and (dst in PEDAL_LIBRARY or dst == AMP_NODE_ID):
+                        clean_connections.append([src, dst])
+            self.state["canvasConnections"] = clean_connections
+
     def persist_state(self, silent=False):
         payload = {
             "genre": self.state["genre"],
             "guitarType": self.state["guitarType"],
             "guitarProfile": self.state["guitarProfile"],
             "ampModel": self.state["ampModel"],
+            "theme": self.state["theme"],
             "fontPreset": self.state["fontPreset"],
             "fontSize": font_pixels_for_preset(self.state["fontPreset"]),
             "chain": self.state["chain"],
+            "canvasPositions": self.state.get("canvasPositions", {}),
+            "canvasConnections": self.state.get("canvasConnections", []),
         }
         STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         if not silent:
@@ -1491,19 +2178,22 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
     def apply_theme(self):
         preset_key = self.state.get("fontPreset", "medium")
         font_size = font_pixels_for_preset(preset_key)
+        theme = theme_for_key(self.state.get("theme", "dark"))
         self.setStyleSheet(
             f"""
-            QWidget {{ background: #11161a; color: #e9efe4; font-family: 'Trebuchet MS'; font-size: {font_size}px; }}
-            QTabWidget::pane {{ border: 1px solid #354047; border-radius: 8px; }}
-            QTabBar::tab {{ background: #1d252b; border: 1px solid #364149; border-bottom: none; padding: 8px 14px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
-            QTabBar::tab:selected {{ background: #d6fd73; color: #1a230f; font-weight: 700; }}
-            QGroupBox {{ border: 1px solid #3b4750; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #d6e2cb; }}
-            QComboBox, QListWidget, QTextEdit, QPushButton {{ background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }}
-            QPushButton:hover {{ border: 1px solid #6c7a85; }}
-            QLabel {{ color: #cfd8c9; }}
+            QWidget {{ background: {theme["bg"]}; color: {theme["text"]}; font-family: 'Trebuchet MS'; font-size: {font_size}px; }}
+            QTabWidget::pane {{ border: 1px solid {theme["frame"]}; border-radius: 8px; }}
+            QTabBar::tab {{ background: {theme["tab"]}; border: 1px solid {theme["frame"]}; border-bottom: none; padding: 8px 14px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
+            QTabBar::tab:selected {{ background: {theme["tab_selected_bg"]}; color: {theme["tab_selected_fg"]}; font-weight: 700; }}
+            QGroupBox {{ border: 1px solid {theme["frame"]}; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {theme["group_title"]}; }}
+            QComboBox, QListWidget, QTextEdit, QPushButton {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
+            QPushButton:hover {{ border: 1px solid {theme["tab_selected_bg"]}; }}
+            QLabel {{ color: {theme["text"]}; }}
             """
         )
+        if hasattr(self, "board_canvas"):
+            self.board_canvas.set_theme(theme)
 
 
 def main():
