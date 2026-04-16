@@ -3,3 +3,6 @@ AGENTS.md
 .DS_Store
 .secrets/
 secure_package/*.decrypted.tar.gz
+__pycache__/
+*.pyc
+.pedal_architect_py_state.json
