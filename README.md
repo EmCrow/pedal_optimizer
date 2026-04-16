@@ -14,9 +14,14 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Adjustable UI `Font Size` preset dropdown (`Small`, `Medium`, `Large`, `XL`) with persisted selection.
 - Resizable split-panel layout so builder/settings columns scale with the window.
 - Drag pedals from bank to active chain and drag active pedals back to bank to remove.
-- Visual board canvas with draggable pedal images and click-drag cable routing into amp.
-- Only pedals connected by placed cables into the amp are used for final recommendations.
+- Visual board canvas with draggable pedal graphics, guitar image node, and amp node.
+- Pedal jack orientation is fixed: input on the right, output on the left.
+- Guitar-to-pedal-to-amp cabling is explicit; only the connected path from guitar into amp is used for final recommendations.
+- Pedal cards include `x` remove and side `~` disconnect buttons for quick edits.
+- `Clean Up Layout` arranges active pedals in a tidy grid line.
 - Color scheme presets: `Dark`, `Light`, `Sunset`, and `Ocean`.
+- Global top controls (including `Style`) stay visible while switching tabs.
+- Amp node uses brand-adjacent color treatment per selected amp model.
 
 ## Run
 
@@ -24,6 +29,26 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 python3 -m pip install -r requirements-pyqt.txt
 python3 pyqt_app.py
 ```
+
+## Build Contained App
+
+```bash
+python3 -m PyInstaller --noconfirm --clean --windowed --name PedalArchitect pyqt_app.py --add-data "assets/guitars:assets/guitars"
+```
+
+Output app bundle:
+
+- `dist/PedalArchitect.app`
+
+## Backup Naming
+
+Backups use:
+
+- `<project_name>_<branch>_<YYYY-MM-DD_HHMM>`
+
+Example:
+
+- `pedal_config_py_app_2026-04-16_1038`
 
 ## Branch note
 
