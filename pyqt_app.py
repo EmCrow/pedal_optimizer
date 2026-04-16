@@ -19,6 +19,15 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from data.theory_data import CAGED_SHAPES, SCALE_LIBRARY
+from functions.runtime_helpers import (
+    clamp as util_clamp,
+    db_value as util_db_value,
+    percent_from_db as util_percent_from_db,
+    quick_knob as util_quick_knob,
+    to_clock as util_to_clock,
+)
+from ui.theme_presets import THEMES, THEME_PRESET_SPECS
 
 
 PEDAL_LIBRARY = {
@@ -488,136 +497,7 @@ FONT_PRESET_SPECS = [
     ("xl", "XL", 19),
 ]
 FONT_PRESETS = {key: {"label": label, "px": px} for key, label, px in FONT_PRESET_SPECS}
-THEME_PRESET_SPECS = [
-    ("dark", "Dark"),
-    ("light", "Light"),
-    ("sunset", "Sunset"),
-    ("ocean", "Ocean"),
-    ("prism", "Prism (Floyd)"),
-    ("brown_sound", "Brown Sound (VH)"),
-    ("paisley", "Paisley Prairie"),
-]
-THEMES = {
-    "dark": {
-        "bg": "#11161a",
-        "text": "#e9efe4",
-        "frame": "#3a464e",
-        "panel": "#161f25",
-        "tab": "#1d252b",
-        "tab_selected_bg": "#d6fd73",
-        "tab_selected_fg": "#1a230f",
-        "group_title": "#d6e2cb",
-        "canvas_bg": "#0f1418",
-        "canvas_grid": "#202b33",
-        "canvas_edge": "#86c7ff",
-        "canvas_edge_preview": "#86c7ff",
-        "amp_bg": "#232f38",
-        "amp_fg": "#f3f8f0",
-        "positive": "#66d17a",
-    },
-    "light": {
-        "bg": "#f5f6f8",
-        "text": "#21252b",
-        "frame": "#c0c7d1",
-        "panel": "#ffffff",
-        "tab": "#e7ebf0",
-        "tab_selected_bg": "#2f6feb",
-        "tab_selected_fg": "#ffffff",
-        "group_title": "#253347",
-        "canvas_bg": "#edf1f6",
-        "canvas_grid": "#d0d8e4",
-        "canvas_edge": "#1f6feb",
-        "canvas_edge_preview": "#1f6feb",
-        "amp_bg": "#d7e1ec",
-        "amp_fg": "#1f2f42",
-        "positive": "#1f8a3d",
-    },
-    "sunset": {
-        "bg": "#2a1d22",
-        "text": "#f7e8da",
-        "frame": "#7f4a53",
-        "panel": "#3a262d",
-        "tab": "#4a3038",
-        "tab_selected_bg": "#ffb347",
-        "tab_selected_fg": "#3a2523",
-        "group_title": "#ffcf97",
-        "canvas_bg": "#2e1d24",
-        "canvas_grid": "#5d3943",
-        "canvas_edge": "#ffd166",
-        "canvas_edge_preview": "#ffd166",
-        "amp_bg": "#5a3031",
-        "amp_fg": "#ffe9c4",
-        "positive": "#9ce26a",
-    },
-    "ocean": {
-        "bg": "#0f2430",
-        "text": "#def1f6",
-        "frame": "#2f6172",
-        "panel": "#123544",
-        "tab": "#164454",
-        "tab_selected_bg": "#2ad4c5",
-        "tab_selected_fg": "#0f2831",
-        "group_title": "#a5e8df",
-        "canvas_bg": "#0d2a36",
-        "canvas_grid": "#235062",
-        "canvas_edge": "#6ee7ff",
-        "canvas_edge_preview": "#6ee7ff",
-        "amp_bg": "#1c4a5a",
-        "amp_fg": "#ddfbff",
-        "positive": "#58d39e",
-    },
-    "prism": {
-        "bg": "#11101b",
-        "text": "#f5f4ff",
-        "frame": "#544f73",
-        "panel": "#1a1830",
-        "tab": "#242147",
-        "tab_selected_bg": "#74efff",
-        "tab_selected_fg": "#111327",
-        "group_title": "#f6d7ff",
-        "canvas_bg": "#120f22",
-        "canvas_grid": "#2f2a56",
-        "canvas_edge": "#ffd268",
-        "canvas_edge_preview": "#ffd268",
-        "amp_bg": "#2d2541",
-        "amp_fg": "#fff3de",
-        "positive": "#8cffaa",
-    },
-    "brown_sound": {
-        "bg": "#1a1110",
-        "text": "#ffe7d2",
-        "frame": "#6f3f37",
-        "panel": "#291716",
-        "tab": "#3a1e1b",
-        "tab_selected_bg": "#e03e31",
-        "tab_selected_fg": "#fff6ec",
-        "group_title": "#ffb184",
-        "canvas_bg": "#1f1211",
-        "canvas_grid": "#4a2a26",
-        "canvas_edge": "#ff8a3b",
-        "canvas_edge_preview": "#ff8a3b",
-        "amp_bg": "#41231e",
-        "amp_fg": "#ffe9d1",
-        "positive": "#ffd166",
-    },
-    "paisley": {
-        "bg": "#f4efe3",
-        "text": "#243033",
-        "frame": "#9fb4a9",
-        "panel": "#fffdf7",
-        "tab": "#e3efe8",
-        "tab_selected_bg": "#3e8f68",
-        "tab_selected_fg": "#effff4",
-        "group_title": "#3f5d55",
-        "canvas_bg": "#ecf4ef",
-        "canvas_grid": "#c5dbd1",
-        "canvas_edge": "#2f6a90",
-        "canvas_edge_preview": "#2f6a90",
-        "amp_bg": "#d4e6dc",
-        "amp_fg": "#1f3f37",
-        "positive": "#2c9d68",
-    },
-}
+# Theme definitions are sourced from `ui/theme_presets.py`.
 PEDAL_COLORS = {
     "cs3": "#67bfe8",
     "sd1": "#e7cc38",
@@ -681,78 +561,7 @@ PITCH_CLASS_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#",
 SHARP_KEY_SIGNATURES = {"G", "D", "A", "E", "B", "F#", "C#"}
 STANDARD_TUNING_PCS_TOP_TO_BOTTOM = [4, 11, 7, 2, 9, 4]  # E, B, G, D, A, E
 STANDARD_TUNING_PCS_LOW_TO_HIGH = list(reversed(STANDARD_TUNING_PCS_TOP_TO_BOTTOM))
-
-CAGED_SHAPES = {
-    "c": {
-        "label": "C Shape",
-        "minor_start_offset": 5,
-        "major_start_offset": 2,
-        "window_size": 5,
-    },
-    "a": {
-        "label": "A Shape",
-        "minor_start_offset": 7,
-        "major_start_offset": 4,
-        "window_size": 5,
-    },
-    "g": {
-        "label": "G Shape",
-        "minor_start_offset": 10,
-        "major_start_offset": 7,
-        "window_size": 5,
-    },
-    "e": {
-        "label": "E Shape",
-        "minor_start_offset": 0,
-        "major_start_offset": -3,
-        "window_size": 5,
-    },
-    "d": {
-        "label": "D Shape",
-        "minor_start_offset": 3,
-        "major_start_offset": 0,
-        "window_size": 5,
-    },
-}
-
-SCALE_LIBRARY = {
-    "minor_pentatonic": {
-        "label": "Minor Pentatonic",
-        "intervals": [0, 3, 5, 7, 10],
-        "formula": "1 b3 4 5 b7",
-        "family": "minor",
-    },
-    "major_pentatonic": {
-        "label": "Major Pentatonic",
-        "intervals": [0, 2, 4, 7, 9],
-        "formula": "1 2 3 5 6",
-        "family": "major",
-    },
-    "minor_blues": {
-        "label": "Minor Blues",
-        "intervals": [0, 3, 5, 6, 7, 10],
-        "formula": "1 b3 4 b5 5 b7",
-        "family": "minor",
-    },
-    "major_scale": {
-        "label": "Major Scale (Ionian)",
-        "intervals": [0, 2, 4, 5, 7, 9, 11],
-        "formula": "1 2 3 4 5 6 7",
-        "family": "major",
-    },
-    "natural_minor": {
-        "label": "Natural Minor (Aeolian)",
-        "intervals": [0, 2, 3, 5, 7, 8, 10],
-        "formula": "1 2 b3 4 5 b6 b7",
-        "family": "minor",
-    },
-    "mixolydian": {
-        "label": "Mixolydian",
-        "intervals": [0, 2, 4, 5, 7, 9, 10],
-        "formula": "1 2 3 4 5 6 b7",
-        "family": "major",
-    },
-}
+# CAGED shape and scale data are sourced from `data/theory_data.py`.
 
 
 class PedalBankListWidget(QtWidgets.QListWidget):
@@ -1541,7 +1350,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
 
 def clamp(value, min_value, max_value):
-    return max(min_value, min(max_value, value))
+    return util_clamp(value, min_value, max_value)
 
 
 def font_pixels_for_preset(preset_key):
@@ -1573,33 +1382,19 @@ def sanitize_chain(chain):
 
 
 def to_clock(percent):
-    clamped = clamp(int(round(percent)), 0, 100)
-    start_minutes = 7 * 60
-    sweep_minutes = 10 * 60
-    absolute = int(round(start_minutes + (clamped / 100.0) * sweep_minutes))
-    hours = absolute // 60
-    minutes = absolute % 60
-    if hours > 12:
-        hours -= 12
-    return f"{hours}:{minutes:02d}"
+    return util_to_clock(percent)
 
 
 def quick_knob(value):
-    if not isinstance(value, (int, float)):
-        value = 50
-    safe = clamp(int(round(value)), 0, 100)
-    return f"{to_clock(safe)} ({safe}%)"
+    return util_quick_knob(value)
 
 
 def db_value(value):
-    safe = int(round(value)) if isinstance(value, (int, float)) else 0
-    return f"+{safe} dB" if safe > 0 else f"{safe} dB"
+    return util_db_value(value)
 
 
 def percent_from_db(value, low=-12, high=12):
-    safe = clamp(int(round(value if isinstance(value, (int, float)) else 0)), low, high)
-    span = max(1, high - low)
-    return int(round(((safe - low) / span) * 100))
+    return util_percent_from_db(value, low=low, high=high)
 
 
 def pedal_knob_values(pedal_id, settings):

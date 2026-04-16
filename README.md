@@ -2,6 +2,17 @@
 
 Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recommendations.
 
+## Modular Branch Layout (`py_app_modular`)
+
+- `data/`: research-backed datasets and theory JSON consumed by runtime.
+- `functions/`: reusable runtime logic helpers.
+- `ui/`: theme presets and visual-system configuration.
+- `assets/`: static images and media.
+- `automation/`: build scripts for macOS and Windows packaging.
+- `documentation/`: operational docs, changelog, diagrams, and sources.
+- `.git-agent/`: git workflow/bug tracking contract.
+- Root `AGENTS.md`: orchestrates all scoped agents.
+
 ## What this branch includes
 
 - `pyqt_app.py` with drag/drop pedal bank -> signal chain + reorder support.

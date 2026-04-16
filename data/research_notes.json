@@ -1,0 +1,14 @@
+{
+  "tone_research": [
+    "SD-1 into DS-1 typically tightens attack while preserving gain saturation.",
+    "Post-gain EQ stages (GE-7/EQ10) are commonly used for final mix contour."
+  ],
+  "order_research": [
+    "Compression before gain tends to improve consistency in pick dynamics.",
+    "Delay and loop station near chain end preserves repeat/loop fidelity."
+  ],
+  "theory_research": [
+    "Minor pentatonic formula: 1 b3 4 5 b7.",
+    "Major pentatonic formula: 1 2 3 5 6."
+  ]
+}

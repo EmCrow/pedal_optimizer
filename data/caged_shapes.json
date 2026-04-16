@@ -1,0 +1,32 @@
+{
+  "c": {
+    "label": "C Shape",
+    "minor_start_offset": 5,
+    "major_start_offset": 2,
+    "window_size": 5
+  },
+  "a": {
+    "label": "A Shape",
+    "minor_start_offset": 7,
+    "major_start_offset": 4,
+    "window_size": 5
+  },
+  "g": {
+    "label": "G Shape",
+    "minor_start_offset": 10,
+    "major_start_offset": 7,
+    "window_size": 5
+  },
+  "e": {
+    "label": "E Shape",
+    "minor_start_offset": 0,
+    "major_start_offset": -3,
+    "window_size": 5
+  },
+  "d": {
+    "label": "D Shape",
+    "minor_start_offset": 3,
+    "major_start_offset": 0,
+    "window_size": 5
+  }
+}

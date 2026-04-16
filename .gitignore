@@ -1,5 +1,4 @@
 backups/
-AGENTS.md
 .DS_Store
 .secrets/
 secure_package/*.decrypted.tar.gz
