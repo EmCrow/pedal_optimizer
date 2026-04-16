@@ -8,6 +8,7 @@ import copy
 import itertools
 import json
 import math
+import re
 from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -403,6 +404,40 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Target roots and b5 color tones in the 8th-fret box on turnarounds.",
     },
 }
+
+CIRCLE_FIFTHS_MAJOR = ["C", "G", "D", "A", "E", "B", "F#", "Db", "Ab", "Eb", "Bb", "F"]
+CIRCLE_FIFTHS_MINOR = ["Am", "Em", "Bm", "F#m", "C#m", "G#m", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm"]
+NASHVILLE_MAJOR_CHART = [
+    ("C", ["C", "Dm", "Em", "F", "G", "Am", "Bdim"]),
+    ("G", ["G", "Am", "Bm", "C", "D", "Em", "F#dim"]),
+    ("D", ["D", "Em", "F#m", "G", "A", "Bm", "C#dim"]),
+    ("A", ["A", "Bm", "C#m", "D", "E", "F#m", "G#dim"]),
+    ("E", ["E", "F#m", "G#m", "A", "B", "C#m", "D#dim"]),
+    ("B", ["B", "C#m", "D#m", "E", "F#", "G#m", "A#dim"]),
+    ("F#", ["F#", "G#m", "A#m", "B", "C#", "D#m", "Fdim"]),
+    ("Db", ["Db", "Ebm", "Fm", "Gb", "Ab", "Bbm", "Cdim"]),
+    ("Ab", ["Ab", "Bbm", "Cm", "Db", "Eb", "Fm", "Gdim"]),
+    ("Eb", ["Eb", "Fm", "Gm", "Ab", "Bb", "Cm", "Ddim"]),
+    ("Bb", ["Bb", "Cm", "Dm", "Eb", "F", "Gm", "Adim"]),
+    ("F", ["F", "Gm", "Am", "Bb", "C", "Dm", "Edim"]),
+]
+NOTE_ALIAS_MAP = {
+    "CB": "B",
+    "B#": "C",
+    "DB": "Db",
+    "C#": "Db",
+    "D#": "Eb",
+    "EB": "Eb",
+    "E#": "F",
+    "FB": "E",
+    "F#": "F#",
+    "GB": "F#",
+    "G#": "Ab",
+    "AB": "Ab",
+    "A#": "Bb",
+    "BB": "Bb",
+}
+CHORD_ROOT_RE = re.compile(r"^\s*([A-Ga-g])([#b]?)")
 
 ORDER_NOTE_PATTERNS = {
     "cs3": ["cs-3", "cs3", "compress"],
@@ -1680,6 +1715,188 @@ def build_recommendation(genre_key, chain, guitar_type, amp_model, guitar_profil
     return recommendation
 
 
+def normalize_note_name(note):
+    if not note:
+        return ""
+    key = str(note).strip().upper()
+    if key in NOTE_ALIAS_MAP:
+        return NOTE_ALIAS_MAP[key]
+    if len(key) == 2 and key[1] == "B":
+        return f"{key[0]}b"
+    return key
+
+
+def parse_chord_token(token):
+    if not isinstance(token, str):
+        return None
+    clean = token.strip()
+    if not clean:
+        return None
+    match = CHORD_ROOT_RE.match(clean)
+    if not match:
+        return None
+    root_raw = f"{match.group(1)}{match.group(2)}"
+    root = normalize_note_name(root_raw)
+    suffix = clean[match.end():].strip().lower()
+    quality = "major"
+    if "dim" in suffix:
+        quality = "dim"
+    elif suffix.startswith("m") and not suffix.startswith("maj"):
+        quality = "minor"
+    shorthand = root
+    if quality == "minor":
+        shorthand = f"{root}m"
+    elif quality == "dim":
+        shorthand = f"{root}dim"
+    return {
+        "token": clean,
+        "root": root,
+        "quality": quality,
+        "shorthand": shorthand,
+    }
+
+
+def extract_concert_chords_for_genre(genre_key):
+    playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+    chords = []
+    for progression in playbook.get("concertProgression", []):
+        if not isinstance(progression, str):
+            continue
+        for token in progression.split("-"):
+            clean = token.strip()
+            if clean:
+                chords.append(clean)
+    return unique_list(chords)
+
+
+def determine_best_nashville_key(chord_tokens):
+    parsed = [parse_chord_token(token) for token in chord_tokens]
+    parsed = [item for item in parsed if item]
+    if not parsed:
+        return "C"
+    best_key = "C"
+    best_score = -1
+    for key_name, degrees in NASHVILLE_MAJOR_CHART:
+        degree_set = set(degrees)
+        score = 0
+        for chord in parsed:
+            if chord["shorthand"] in degree_set:
+                score += 2
+            elif chord["root"] in degree_set:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_key = key_name
+    return best_key
+
+
+class CircleOfFifthsWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(320, 320)
+        self.theme = THEMES["dark"]
+        self.major_highlights = set()
+        self.minor_highlights = set()
+        self.dim_highlights = set()
+
+    def set_theme(self, theme):
+        self.theme = theme
+        self.update()
+
+    def set_highlighted_chords(self, chords):
+        major = set()
+        minor = set()
+        dim = set()
+        for token in chords:
+            parsed = parse_chord_token(token)
+            if not parsed:
+                continue
+            if parsed["quality"] == "minor":
+                minor.add(parsed["root"])
+            elif parsed["quality"] == "dim":
+                dim.add(parsed["root"])
+            else:
+                major.add(parsed["root"])
+        self.major_highlights = major
+        self.minor_highlights = minor
+        self.dim_highlights = dim
+        self.update()
+
+    def draw_ring_node(self, painter, center, radius, label, active=False, is_minor=False):
+        normal_bg = QtGui.QColor(self.theme["panel"])
+        normal_edge = QtGui.QColor(self.theme["frame"])
+        highlight_bg = QtGui.QColor(self.theme["tab_selected_bg"])
+        highlight_fg = QtGui.QColor(self.theme["tab_selected_fg"])
+        text_color = QtGui.QColor(self.theme["text"])
+        if is_minor:
+            normal_bg = normal_bg.darker(108)
+        painter.setPen(QtGui.QPen(highlight_bg.darker(160) if active else normal_edge, 1.4))
+        painter.setBrush(QtGui.QBrush(highlight_bg if active else normal_bg))
+        painter.drawEllipse(center, radius, radius)
+        painter.setPen(highlight_fg if active else text_color)
+        font = painter.font()
+        font.setBold(active)
+        font.setPointSize(max(8, font.pointSize() - (1 if is_minor else 0)))
+        painter.setFont(font)
+        painter.drawText(
+            QtCore.QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2),
+            QtCore.Qt.AlignCenter,
+            label,
+        )
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
+        rect = self.rect().adjusted(12, 12, -12, -12)
+        center = rect.center()
+        outer_radius = max(72, min(rect.width(), rect.height()) // 2 - 28)
+        inner_radius = int(round(outer_radius * 0.62))
+
+        painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawEllipse(center, outer_radius, outer_radius)
+        painter.drawEllipse(center, inner_radius, inner_radius)
+
+        for idx, major_key in enumerate(CIRCLE_FIFTHS_MAJOR):
+            angle = math.radians(-90 + idx * 30)
+            x = center.x() + math.cos(angle) * outer_radius
+            y = center.y() + math.sin(angle) * outer_radius
+            self.draw_ring_node(
+                painter,
+                QtCore.QPointF(x, y),
+                18,
+                major_key,
+                active=major_key in self.major_highlights or major_key in self.dim_highlights,
+                is_minor=False,
+            )
+
+        for idx, minor_key in enumerate(CIRCLE_FIFTHS_MINOR):
+            angle = math.radians(-90 + idx * 30)
+            x = center.x() + math.cos(angle) * inner_radius
+            y = center.y() + math.sin(angle) * inner_radius
+            root = minor_key[:-1]
+            self.draw_ring_node(
+                painter,
+                QtCore.QPointF(x, y),
+                15,
+                minor_key,
+                active=root in self.minor_highlights,
+                is_minor=True,
+            )
+
+        painter.setPen(QtGui.QColor(self.theme["text"]))
+        center_font = painter.font()
+        center_font.setBold(True)
+        center_font.setPointSize(max(8, center_font.pointSize() - 1))
+        painter.setFont(center_font)
+        painter.drawText(
+            QtCore.QRectF(center.x() - 52, center.y() - 26, 104, 52),
+            QtCore.Qt.AlignCenter,
+            "Circle\nof Fifths",
+        )
+
+
 class PedalArchitectWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1866,27 +2083,138 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(self.settings_tab)
         layout.setSpacing(10)
 
-        self.settings_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        self.settings_splitter.setChildrenCollapsible(False)
-        layout.addWidget(self.settings_splitter, 1)
+        pedals_group = QtWidgets.QGroupBox("Pedal Settings")
+        pedals_layout = QtWidgets.QVBoxLayout(pedals_group)
+        self.pedal_cards_container = QtWidgets.QWidget()
+        self.pedal_cards_grid = QtWidgets.QGridLayout(self.pedal_cards_container)
+        self.pedal_cards_grid.setContentsMargins(4, 4, 4, 4)
+        self.pedal_cards_grid.setHorizontalSpacing(8)
+        self.pedal_cards_grid.setVerticalSpacing(8)
+        for col in range(5):
+            self.pedal_cards_grid.setColumnStretch(col, 1)
+        pedals_layout.addWidget(self.pedal_cards_container, 1)
+        self.pedal_empty_label = QtWidgets.QLabel(
+            "No connected signal chain yet.\nAdd pedals and cable them from guitar to amp."
+        )
+        self.pedal_empty_label.setWordWrap(True)
+        pedals_layout.addWidget(self.pedal_empty_label)
+        layout.addWidget(pedals_group, 3)
 
-        self.pedals_settings_text = self.make_settings_column(self.settings_splitter, "Pedals")
-        self.guitar_settings_text = self.make_settings_column(self.settings_splitter, "Guitar")
-        self.amp_settings_text = self.make_settings_column(self.settings_splitter, "Amp")
-        self.justification_text = self.make_settings_column(self.settings_splitter, "Justification")
-        self.settings_splitter.setStretchFactor(0, 3)
-        self.settings_splitter.setStretchFactor(1, 2)
-        self.settings_splitter.setStretchFactor(2, 2)
-        self.settings_splitter.setStretchFactor(3, 4)
+        detail_row = QtWidgets.QHBoxLayout()
+        detail_row.setSpacing(10)
+        guitar_group, self.guitar_settings_text = self.make_info_panel("Guitar Settings")
+        amp_group, self.amp_settings_text = self.make_info_panel("Amp Settings")
+        just_group, self.justification_text = self.make_info_panel("Justification")
+        detail_row.addWidget(guitar_group, 1)
+        detail_row.addWidget(amp_group, 1)
+        detail_row.addWidget(just_group, 1)
+        layout.addLayout(detail_row, 2)
 
     def build_summary_tab(self):
         layout = QtWidgets.QVBoxLayout(self.summary_tab)
-        group = QtWidgets.QGroupBox("Rig Summary")
-        group_layout = QtWidgets.QVBoxLayout(group)
+        summary_group = QtWidgets.QGroupBox("Rig Summary")
+        group_layout = QtWidgets.QVBoxLayout(summary_group)
         self.summary_text = QtWidgets.QTextEdit()
         self.summary_text.setReadOnly(True)
         group_layout.addWidget(self.summary_text)
-        layout.addWidget(group)
+        layout.addWidget(summary_group, 2)
+
+        analysis_row = QtWidgets.QHBoxLayout()
+        analysis_row.setSpacing(10)
+
+        circle_group = QtWidgets.QGroupBox("Circle of Fifths")
+        circle_layout = QtWidgets.QVBoxLayout(circle_group)
+        self.circle_of_fifths = CircleOfFifthsWidget()
+        self.circle_hint = QtWidgets.QLabel("Highlighted from suggested concert progression chords.")
+        self.circle_hint.setWordWrap(True)
+        circle_layout.addWidget(self.circle_of_fifths, 1)
+        circle_layout.addWidget(self.circle_hint)
+        analysis_row.addWidget(circle_group, 1)
+
+        nashville_group = QtWidgets.QGroupBox("Nashville Number Chart")
+        nashville_layout = QtWidgets.QVBoxLayout(nashville_group)
+        self.nashville_hint = QtWidgets.QLabel("Best-matching key is highlighted based on the progression above.")
+        self.nashville_hint.setWordWrap(True)
+        self.nashville_table = QtWidgets.QTableWidget(len(NASHVILLE_MAJOR_CHART), 8)
+        self.nashville_table.setHorizontalHeaderLabels(["Key", "1", "2m", "3m", "4", "5", "6m", "7dim"])
+        self.nashville_table.verticalHeader().setVisible(False)
+        self.nashville_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.nashville_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.nashville_table.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.nashville_table.setAlternatingRowColors(True)
+        self.nashville_table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.nashville_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        nashville_layout.addWidget(self.nashville_hint)
+        nashville_layout.addWidget(self.nashville_table, 1)
+        analysis_row.addWidget(nashville_group, 2)
+
+        layout.addLayout(analysis_row, 3)
+        self.populate_nashville_table()
+
+    def make_info_panel(self, title):
+        group = QtWidgets.QGroupBox(title)
+        group_layout = QtWidgets.QVBoxLayout(group)
+        text = QtWidgets.QTextEdit()
+        text.setReadOnly(True)
+        text.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        group_layout.addWidget(text)
+        group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        return group, text
+
+    def clear_layout_widgets(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def build_pedal_settings_card(self, pedal_id, settings):
+        frame = QtWidgets.QFrame()
+        frame.setObjectName("pedalSettingsCard")
+        frame.setMinimumHeight(220)
+        frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        content = QtWidgets.QVBoxLayout(frame)
+        content.setContentsMargins(10, 10, 10, 10)
+        content.setSpacing(6)
+
+        title = QtWidgets.QLabel(PEDAL_LIBRARY[pedal_id])
+        title.setObjectName("pedalCardTitle")
+        title.setWordWrap(True)
+        content.addWidget(title)
+
+        details = QtWidgets.QLabel()
+        details.setWordWrap(True)
+        details.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        details.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        block = self.format_pedal_block(pedal_id, settings).splitlines()
+        details.setText("\n".join(block[1:]) if len(block) > 1 else "Optimized for this rig style.")
+        content.addWidget(details, 1)
+        return frame
+
+    def populate_nashville_table(self):
+        self.nashville_table.clearContents()
+        for row, (key_name, degrees) in enumerate(NASHVILLE_MAJOR_CHART):
+            values = [key_name] + degrees
+            for col, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                align = QtCore.Qt.AlignCenter if col > 0 else (QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                item.setTextAlignment(align)
+                self.nashville_table.setItem(row, col, item)
+
+    def highlight_nashville_key(self, key_name):
+        theme = theme_for_key(self.state.get("theme", "dark"))
+        normal_bg = QtGui.QColor(theme["panel"])
+        normal_fg = QtGui.QColor(theme["text"])
+        highlight_bg = QtGui.QColor(theme["tab_selected_bg"])
+        highlight_fg = QtGui.QColor(theme["tab_selected_fg"])
+        for row in range(self.nashville_table.rowCount()):
+            is_match = self.nashville_table.item(row, 0).text() == key_name
+            for col in range(self.nashville_table.columnCount()):
+                item = self.nashville_table.item(row, col)
+                if item is None:
+                    continue
+                item.setBackground(highlight_bg if is_match else normal_bg)
+                item.setForeground(highlight_fg if is_match else normal_fg)
 
     def add_control_column(self, layout, label_text, widget):
         wrapper_widget = QtWidgets.QWidget()
@@ -2584,16 +2912,17 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.playbook_preview.setPlainText("\n".join(pb_lines))
 
     def render_settings_tab(self, recommendation):
-        pedal_lines = []
-        for pedal_id in self.connected_chain:
-            pedal_settings = recommendation["pedals"].get(pedal_id, {})
-            pedal_lines.append(self.format_pedal_block(pedal_id, pedal_settings))
-        if pedal_lines:
-            self.pedals_settings_text.setPlainText("\n\n".join(pedal_lines))
+        self.clear_layout_widgets(self.pedal_cards_grid)
+        if self.connected_chain:
+            self.pedal_empty_label.hide()
+            for idx, pedal_id in enumerate(self.connected_chain):
+                pedal_settings = recommendation["pedals"].get(pedal_id, {})
+                card = self.build_pedal_settings_card(pedal_id, pedal_settings)
+                row = idx // 5
+                col = idx % 5
+                self.pedal_cards_grid.addWidget(card, row, col)
         else:
-            self.pedals_settings_text.setPlainText(
-                "No connected signal chain yet.\nAdd pedals to Active Pedals, then cable them on the Board Canvas into the amp."
-            )
+            self.pedal_empty_label.show()
 
         guitar = recommendation.get("guitar")
         if guitar:
@@ -2678,12 +3007,15 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
     def render_summary_tab(self, recommendation):
         amp = recommendation["amp"]
         unpatched = [pid for pid in self.state["chain"] if pid not in self.connected_chain]
+        style_chords = extract_concert_chords_for_genre(self.state["genre"])
+        best_key = determine_best_nashville_key(style_chords)
         bullets = [
             f"- Style: {recommendation['label']}",
             f"- Guitar: {'Acoustic' if self.state['guitarType'] == 'acoustic' else 'Electric'} | Profile: {recommendation['guitar']['label'] if recommendation.get('guitar') else 'Default'}",
             f"- Amp: {recommendation['amp_label']} ({amp.get('voicing', 'Custom')})",
             f"- Amp Dial: Gain {quick_knob(amp['gain'])}, Bass {quick_knob(amp['bass'])}, Mid {quick_knob(amp['mid'])}, Treble {quick_knob(amp['treble'])}, Presence {quick_knob(amp['presence'])}, Master {quick_knob(amp['master'])}",
             f"- Signal Chain: {self.chain_to_text(self.connected_chain)}",
+            f"- Suggested Key Center: {best_key} (from concert progression analysis)",
         ]
         for pedal_id in self.connected_chain:
             bullets.append(f"- {PEDAL_LIBRARY[pedal_id]} active in chain")
@@ -2691,6 +3023,13 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             bullets.append("- Not currently chained to amp: " + ", ".join(PEDAL_LIBRARY[pid] for pid in unpatched))
 
         self.summary_text.setPlainText("\n".join(bullets))
+        self.circle_of_fifths.set_highlighted_chords(style_chords)
+        if style_chords:
+            self.circle_hint.setText("Highlighted chords: " + ", ".join(style_chords))
+        else:
+            self.circle_hint.setText("No style progression chords available.")
+        self.highlight_nashville_key(best_key)
+        self.nashville_hint.setText(f"Best-matching key highlighted: {best_key}")
 
     def calculate_tone_match(self, chain, optimized_chain):
         if not chain:
@@ -2806,12 +3145,19 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QGroupBox {{ border: 1px solid {theme["frame"]}; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {theme["group_title"]}; }}
             QComboBox, QListWidget, QTextEdit, QPushButton {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
+            QFrame#pedalSettingsCard {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 8px; }}
+            QLabel#pedalCardTitle {{ font-weight: 700; color: {theme["group_title"]}; }}
             QPushButton:hover {{ border: 1px solid {theme["tab_selected_bg"]}; }}
             QLabel {{ color: {theme["text"]}; }}
             """
         )
         if hasattr(self, "board_canvas"):
             self.board_canvas.set_theme(theme)
+        if hasattr(self, "circle_of_fifths"):
+            self.circle_of_fifths.set_theme(theme)
+        if hasattr(self, "nashville_table"):
+            key_name = determine_best_nashville_key(extract_concert_chords_for_genre(self.state.get("genre", "rock")))
+            self.highlight_nashville_key(key_name)
 
 
 def main():

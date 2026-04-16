@@ -18,10 +18,12 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Pedal jack orientation is fixed: input on the right, output on the left.
 - Guitar-to-pedal-to-amp cabling is explicit; only the connected path from guitar into amp is used for final recommendations.
 - Pedal cards include `x` remove and side `~` disconnect buttons for quick edits.
-- `Clean Up Layout` arranges active pedals in a tidy grid line.
+- `Clean Up Layout` arranges connected pedals in a right-to-left horizontal signal row first, then wraps.
 - Color scheme presets: `Dark`, `Light`, `Sunset`, and `Ocean`.
 - Global top controls (including `Style`) stay visible while switching tabs.
 - Amp node uses brand-adjacent color treatment per selected amp model.
+- Rig Settings uses bordered pedal cards (wrap every 5) plus a dedicated second row for guitar/amp/justification.
+- Rig Summary includes a Circle of Fifths (highlighted style chords) and a Nashville number chart.
 
 ## Run
 
@@ -33,12 +35,14 @@ python3 pyqt_app.py
 ## Build Contained App
 
 ```bash
-python3 -m PyInstaller --noconfirm --clean --windowed --name PedalArchitect pyqt_app.py --add-data "assets/guitars:assets/guitars"
+./build_py_app.sh
 ```
 
-Output app bundle:
+Build behavior:
 
-- `dist/PedalArchitect.app`
+- Backs up previous executable artifacts into `backups/executable_backup_<timestamp>/`
+- Writes the new executable next to `pyqt_app.py`:
+  - `PedalArchitect.app`
 
 ## Backup Naming
 
