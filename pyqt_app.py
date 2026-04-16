@@ -5,10 +5,17 @@ Branch: py_app
 """
 
 import copy
+import hashlib
 import itertools
 import json
 import math
 import re
+import socket
+import sys
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -405,6 +412,16 @@ STYLE_PLAYBOOK = {
     },
 }
 
+USUAL_KEYS_BY_GENRE = {
+    "metal": ["E", "D", "A", "C", "B"],
+    "rock": ["E", "A", "D", "G", "C"],
+    "classic-rock": ["A", "E", "D", "G", "C"],
+    "pop": ["C", "G", "D", "A", "F"],
+    "country": ["G", "D", "A", "E", "C"],
+    "hip-hop": ["Am", "Em", "Dm", "F", "C"],
+    "blues": ["E", "A", "G", "C", "D"],
+}
+
 CIRCLE_FIFTHS_MAJOR = ["C", "G", "D", "A", "E", "B", "F#", "Db", "Ab", "Eb", "Bb", "F"]
 CIRCLE_FIFTHS_MINOR = ["Am", "Em", "Bm", "F#m", "C#m", "G#m", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm"]
 NASHVILLE_MAJOR_CHART = [
@@ -451,7 +468,15 @@ ORDER_NOTE_PATTERNS = {
     "rc30": ["rc-30", "rc30", "loop"],
 }
 
-STATE_FILE = Path(".pedal_architect_py_state.json")
+if getattr(sys, "frozen", False):
+    APP_ROOT = Path(sys.executable).resolve().parent
+else:
+    APP_ROOT = Path(__file__).resolve().parent
+
+STATE_FILE = APP_ROOT / ".pedal_architect_py_state.json"
+APP_CONFIG_FILENAME = "pyqt_app_config.json"
+APP_CONFIG_FILE = APP_ROOT / APP_CONFIG_FILENAME
+FEEDBACK_LIMITER_FILE = APP_ROOT / ".pedal_architect_feedback_limits.json"
 PEDAL_MIME_TYPE = "application/x-pedal-architect-pedal-id"
 PEDAL_SOURCE_MIME_TYPE = "application/x-pedal-architect-source"
 AMP_NODE_ID = "__amp__"
@@ -468,6 +493,9 @@ THEME_PRESET_SPECS = [
     ("light", "Light"),
     ("sunset", "Sunset"),
     ("ocean", "Ocean"),
+    ("prism", "Prism (Floyd)"),
+    ("brown_sound", "Brown Sound (VH)"),
+    ("paisley", "Paisley Prairie"),
 ]
 THEMES = {
     "dark": {
@@ -485,6 +513,7 @@ THEMES = {
         "canvas_edge_preview": "#86c7ff",
         "amp_bg": "#232f38",
         "amp_fg": "#f3f8f0",
+        "positive": "#66d17a",
     },
     "light": {
         "bg": "#f5f6f8",
@@ -501,6 +530,7 @@ THEMES = {
         "canvas_edge_preview": "#1f6feb",
         "amp_bg": "#d7e1ec",
         "amp_fg": "#1f2f42",
+        "positive": "#1f8a3d",
     },
     "sunset": {
         "bg": "#2a1d22",
@@ -517,6 +547,7 @@ THEMES = {
         "canvas_edge_preview": "#ffd166",
         "amp_bg": "#5a3031",
         "amp_fg": "#ffe9c4",
+        "positive": "#9ce26a",
     },
     "ocean": {
         "bg": "#0f2430",
@@ -533,6 +564,58 @@ THEMES = {
         "canvas_edge_preview": "#6ee7ff",
         "amp_bg": "#1c4a5a",
         "amp_fg": "#ddfbff",
+        "positive": "#58d39e",
+    },
+    "prism": {
+        "bg": "#11101b",
+        "text": "#f5f4ff",
+        "frame": "#544f73",
+        "panel": "#1a1830",
+        "tab": "#242147",
+        "tab_selected_bg": "#74efff",
+        "tab_selected_fg": "#111327",
+        "group_title": "#f6d7ff",
+        "canvas_bg": "#120f22",
+        "canvas_grid": "#2f2a56",
+        "canvas_edge": "#ffd268",
+        "canvas_edge_preview": "#ffd268",
+        "amp_bg": "#2d2541",
+        "amp_fg": "#fff3de",
+        "positive": "#8cffaa",
+    },
+    "brown_sound": {
+        "bg": "#1a1110",
+        "text": "#ffe7d2",
+        "frame": "#6f3f37",
+        "panel": "#291716",
+        "tab": "#3a1e1b",
+        "tab_selected_bg": "#e03e31",
+        "tab_selected_fg": "#fff6ec",
+        "group_title": "#ffb184",
+        "canvas_bg": "#1f1211",
+        "canvas_grid": "#4a2a26",
+        "canvas_edge": "#ff8a3b",
+        "canvas_edge_preview": "#ff8a3b",
+        "amp_bg": "#41231e",
+        "amp_fg": "#ffe9d1",
+        "positive": "#ffd166",
+    },
+    "paisley": {
+        "bg": "#f4efe3",
+        "text": "#243033",
+        "frame": "#9fb4a9",
+        "panel": "#fffdf7",
+        "tab": "#e3efe8",
+        "tab_selected_bg": "#3e8f68",
+        "tab_selected_fg": "#effff4",
+        "group_title": "#3f5d55",
+        "canvas_bg": "#ecf4ef",
+        "canvas_grid": "#c5dbd1",
+        "canvas_edge": "#2f6a90",
+        "canvas_edge_preview": "#2f6a90",
+        "amp_bg": "#d4e6dc",
+        "amp_fg": "#1f3f37",
+        "positive": "#2c9d68",
     },
 }
 PEDAL_COLORS = {
@@ -558,6 +641,117 @@ AMP_BRAND_COLORS = {
     "fender_twin_reverb": {"bg": "#12171d", "fg": "#dbe9f7"},
     "vox_ac30": {"bg": "#7b5a34", "fg": "#efe0bf"},
     "mesa_dual_rectifier": {"bg": "#2c1c20", "fg": "#f5d9df"},
+}
+
+DEFAULT_APP_CONFIG = {
+    "feedback": {
+        "enabled": True,
+        "webhook_url": "",
+        "timeout_sec": 8,
+        "limiter": {
+            "max_per_day": 24,
+            "max_per_user_per_day": 4,
+            "max_per_user_total": 40,
+            "hard_limit_total": 5000,
+        },
+    },
+    "donate": {
+        "paypal_url": "",
+        "venmo_url": "",
+        "zelle_handle": "",
+    },
+}
+
+NOTE_TO_PITCH_CLASS = {
+    "C": 0,
+    "Db": 1,
+    "D": 2,
+    "Eb": 3,
+    "E": 4,
+    "F": 5,
+    "F#": 6,
+    "G": 7,
+    "Ab": 8,
+    "A": 9,
+    "Bb": 10,
+    "B": 11,
+}
+PITCH_CLASS_CANONICAL = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+PITCH_CLASS_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+SHARP_KEY_SIGNATURES = {"G", "D", "A", "E", "B", "F#", "C#"}
+STANDARD_TUNING_PCS_TOP_TO_BOTTOM = [4, 11, 7, 2, 9, 4]  # E, B, G, D, A, E
+STANDARD_TUNING_PCS_LOW_TO_HIGH = list(reversed(STANDARD_TUNING_PCS_TOP_TO_BOTTOM))
+
+CAGED_SHAPES = {
+    "c": {
+        "label": "C Shape",
+        "minor_start_offset": 5,
+        "major_start_offset": 2,
+        "window_size": 5,
+    },
+    "a": {
+        "label": "A Shape",
+        "minor_start_offset": 7,
+        "major_start_offset": 4,
+        "window_size": 5,
+    },
+    "g": {
+        "label": "G Shape",
+        "minor_start_offset": 10,
+        "major_start_offset": 7,
+        "window_size": 5,
+    },
+    "e": {
+        "label": "E Shape",
+        "minor_start_offset": 0,
+        "major_start_offset": -3,
+        "window_size": 5,
+    },
+    "d": {
+        "label": "D Shape",
+        "minor_start_offset": 3,
+        "major_start_offset": 0,
+        "window_size": 5,
+    },
+}
+
+SCALE_LIBRARY = {
+    "minor_pentatonic": {
+        "label": "Minor Pentatonic",
+        "intervals": [0, 3, 5, 7, 10],
+        "formula": "1 b3 4 5 b7",
+        "family": "minor",
+    },
+    "major_pentatonic": {
+        "label": "Major Pentatonic",
+        "intervals": [0, 2, 4, 7, 9],
+        "formula": "1 2 3 5 6",
+        "family": "major",
+    },
+    "minor_blues": {
+        "label": "Minor Blues",
+        "intervals": [0, 3, 5, 6, 7, 10],
+        "formula": "1 b3 4 b5 5 b7",
+        "family": "minor",
+    },
+    "major_scale": {
+        "label": "Major Scale (Ionian)",
+        "intervals": [0, 2, 4, 5, 7, 9, 11],
+        "formula": "1 2 3 4 5 6 7",
+        "family": "major",
+    },
+    "natural_minor": {
+        "label": "Natural Minor (Aeolian)",
+        "intervals": [0, 2, 3, 5, 7, 8, 10],
+        "formula": "1 2 b3 4 5 b6 b7",
+        "family": "minor",
+    },
+    "mixolydian": {
+        "label": "Mixolydian",
+        "intervals": [0, 2, 4, 5, 7, 9, 10],
+        "formula": "1 2 3 4 5 6 b7",
+        "family": "major",
+    },
 }
 
 
@@ -721,6 +915,8 @@ class PedalCanvasWidget(QtWidgets.QWidget):
     pedalDisconnectRequested = QtCore.pyqtSignal(str, str)
 
     PEDAL_SIZE = QtCore.QSize(84, 124)
+    PEDAL_JACK_INSET = 6
+    PEDAL_JACK_RADIUS = 3
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -897,11 +1093,11 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     def pedal_input_pos(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
-        return QtCore.QPoint(rect.right(), rect.center().y())
+        return QtCore.QPoint(rect.right() - self.PEDAL_JACK_INSET, rect.center().y())
 
     def pedal_output_pos(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
-        return QtCore.QPoint(rect.left(), rect.center().y())
+        return QtCore.QPoint(rect.left() + self.PEDAL_JACK_INSET, rect.center().y())
 
     def pedal_remove_button_rect(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
@@ -926,24 +1122,24 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 return pedal_id
         return None
 
-    def jack_hit(self, point, center, radius=10):
+    def jack_hit(self, point, center, radius=8):
         dx = point.x() - center.x()
         dy = point.y() - center.y()
         return (dx * dx + dy * dy) <= (radius * radius)
 
     def find_output_source(self, point):
-        if self.jack_hit(point, self.guitar_output_pos(), 13):
+        if self.jack_hit(point, self.guitar_output_pos(), 9):
             return GUITAR_NODE_ID
         for pedal_id in reversed(self.pedal_ids):
-            if self.jack_hit(point, self.pedal_output_pos(pedal_id), 11):
+            if self.jack_hit(point, self.pedal_output_pos(pedal_id), 8):
                 return pedal_id
         return None
 
     def find_input_target(self, point):
-        if self.jack_hit(point, self.amp_input_pos(), 14):
+        if self.jack_hit(point, self.amp_input_pos(), 10):
             return AMP_NODE_ID
         for pedal_id in reversed(self.pedal_ids):
-            if self.jack_hit(point, self.pedal_input_pos(pedal_id), 11):
+            if self.jack_hit(point, self.pedal_input_pos(pedal_id), 8):
                 return pedal_id
         return None
 
@@ -1124,7 +1320,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.drawText(guitar_rect.adjusted(4, 4, -4, -4), QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, "Guitar")
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#f6f9ff")))
-        painter.drawEllipse(self.guitar_output_pos(), 6, 6)
+        painter.drawEllipse(self.guitar_output_pos(), 5, 5)
 
         amp_rect = self.amp_rect()
         amp_style = self.amp_brand_style()
@@ -1161,7 +1357,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             painter.drawLine(grill.left() + 2, y, grill.right() - 2, y)
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#edf2fb")))
-        painter.drawEllipse(self.amp_input_pos(), 7, 7)
+        painter.drawEllipse(self.amp_input_pos(), 5, 5)
 
         for src, dst in self.connections:
             if src != GUITAR_NODE_ID and src not in self.pedal_ids:
@@ -1253,8 +1449,8 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
             painter.setPen(QtCore.Qt.NoPen)
             painter.setBrush(QtGui.QBrush(QtGui.QColor("#f0f5fb")))
-            painter.drawEllipse(self.pedal_input_pos(pedal_id), 6, 6)
-            painter.drawEllipse(self.pedal_output_pos(pedal_id), 6, 6)
+            painter.drawEllipse(self.pedal_input_pos(pedal_id), self.PEDAL_JACK_RADIUS, self.PEDAL_JACK_RADIUS)
+            painter.drawEllipse(self.pedal_output_pos(pedal_id), self.PEDAL_JACK_RADIUS, self.PEDAL_JACK_RADIUS)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
@@ -1790,6 +1986,276 @@ def determine_best_nashville_key(chord_tokens):
     return best_key
 
 
+def nashville_degrees_for_key(key_name):
+    for name, degrees in NASHVILLE_MAJOR_CHART:
+        if name == key_name:
+            return list(degrees)
+    return []
+
+
+def major_key_for_selection(token):
+    parsed = parse_chord_token(token)
+    if not parsed:
+        return ""
+    if parsed["quality"] == "minor":
+        minor_token = f"{parsed['root']}m"
+        if minor_token in CIRCLE_FIFTHS_MINOR:
+            idx = CIRCLE_FIFTHS_MINOR.index(minor_token)
+            return CIRCLE_FIFTHS_MAJOR[idx]
+    return parsed["root"]
+
+
+def usual_keys_for_genre(genre_key):
+    keys = USUAL_KEYS_BY_GENRE.get(genre_key, USUAL_KEYS_BY_GENRE.get("rock", []))
+    return unique_list([key for key in keys if key])
+
+
+def major_usual_keys_for_genre(genre_key):
+    majors = []
+    for key in usual_keys_for_genre(genre_key):
+        major = major_key_for_selection(key)
+        if major:
+            majors.append(major)
+    return unique_list(majors)
+
+
+def config_path_candidates():
+    candidates = [APP_CONFIG_FILE, Path.cwd() / APP_CONFIG_FILENAME]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidates.append(Path(meipass) / APP_CONFIG_FILENAME)
+        candidates.append(APP_ROOT.parent / "Resources" / APP_CONFIG_FILENAME)
+        candidates.append(APP_ROOT.parent.parent / "Resources" / APP_CONFIG_FILENAME)
+    deduped = []
+    seen = set()
+    for path in candidates:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def deep_merge_dict(base, overrides):
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_merge_dict(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def pitch_class_for_key_name(key_name):
+    if not key_name:
+        return NOTE_TO_PITCH_CLASS["C"]
+    major = major_key_for_selection(key_name)
+    if not major:
+        parsed = parse_chord_token(str(key_name))
+        major = parsed["root"] if parsed else normalize_note_name(str(key_name))
+    return NOTE_TO_PITCH_CLASS.get(major, NOTE_TO_PITCH_CLASS["C"])
+
+
+def preferred_root_fret(root_pitch_class):
+    candidates = [fret for fret in range(0, 25) if (STANDARD_TUNING_PCS_LOW_TO_HIGH[0] + fret) % 12 == root_pitch_class]
+    for fret in candidates:
+        if 4 <= fret <= 10:
+            return fret
+    for fret in candidates:
+        if 1 <= fret <= 15:
+            return fret
+    return candidates[0] if candidates else 0
+
+
+def key_row_for_name(key_name):
+    for row_name, degrees in NASHVILLE_MAJOR_CHART:
+        if row_name == key_name:
+            return row_name, list(degrees)
+    return "C", list(NASHVILLE_MAJOR_CHART[0][1])
+
+
+def display_note_for_pitch_class(pitch_class, key_name):
+    major_key = major_key_for_selection(key_name) or "C"
+    use_sharps = major_key in SHARP_KEY_SIGNATURES
+    names = PITCH_CLASS_SHARP if use_sharps else PITCH_CLASS_CANONICAL
+    return names[int(pitch_class) % 12]
+
+
+def caged_window_start(root_fret, shape_key, scale_family):
+    shape = CAGED_SHAPES.get(shape_key, CAGED_SHAPES["g"])
+    offset_key = "major_start_offset" if scale_family == "major" else "minor_start_offset"
+    start = int(root_fret) + int(shape.get(offset_key, 0))
+    while start < 0:
+        start += 12
+    while start > 11:
+        start -= 12
+    size = max(4, int(shape.get("window_size", 5)))
+    return start, size
+
+
+class PentatonicNeckWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(420, 260)
+        self.theme = THEMES["dark"]
+        self.key_name = "C"
+        self.shape_key = "g"
+        self.scale_key = "minor_pentatonic"
+        self.start_fret = 0
+        self.end_fret = 5
+        self.note_points = []
+        self.update_pattern()
+
+    def set_theme(self, theme):
+        self.theme = theme
+        self.update()
+
+    def set_selection(self, key_name, shape_key, scale_key=None):
+        self.key_name = key_name if key_name else "C"
+        self.shape_key = shape_key if shape_key in CAGED_SHAPES else "g"
+        if scale_key in SCALE_LIBRARY:
+            self.scale_key = scale_key
+        self.update_pattern()
+        self.update()
+
+    def current_scale(self):
+        return SCALE_LIBRARY.get(self.scale_key, SCALE_LIBRARY["minor_pentatonic"])
+
+    def update_pattern(self):
+        scale = self.current_scale()
+        root_pc = pitch_class_for_key_name(self.key_name)
+        root_fret = preferred_root_fret(root_pc)
+        start, window_size = caged_window_start(root_fret, self.shape_key, scale.get("family", "minor"))
+        end = min(16, start + window_size)
+        intervals = set(scale.get("intervals", []))
+
+        points = []
+        for string_idx, open_pc in enumerate(STANDARD_TUNING_PCS_TOP_TO_BOTTOM):
+            for fret in range(start, end + 1):
+                interval = (open_pc + fret - root_pc) % 12
+                if interval not in intervals:
+                    continue
+                pitch_class = (open_pc + fret) % 12
+                points.append(
+                    {
+                        "string_idx": string_idx,
+                        "fret": fret,
+                        "is_root": interval == 0,
+                        "note": display_note_for_pitch_class(pitch_class, self.key_name),
+                    }
+                )
+
+        self.start_fret = start
+        self.end_fret = end
+        self.note_points = points
+
+    def summary_text(self):
+        shape_label = CAGED_SHAPES.get(self.shape_key, CAGED_SHAPES["g"])["label"]
+        scale = self.current_scale()
+        return f"{self.key_name} {scale['label']} • {shape_label} • frets {self.start_fret}-{self.end_fret}"
+
+    def contrast_text(self, color):
+        # Relative luminance approximation for readable note labels.
+        luminance = (0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())
+        return QtGui.QColor("#101418") if luminance > 170 else QtGui.QColor("#f7f9ff")
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
+
+        panel = self.rect().adjusted(8, 8, -8, -8)
+        painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1.8))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"])))
+        painter.drawRoundedRect(panel, 8, 8)
+
+        fretboard = panel.adjusted(36, 22, -14, -32)
+        strings = 6
+        fret_count = max(3, self.end_fret - self.start_fret + 1)
+        string_gap = fretboard.height() / max(1, strings - 1)
+        fret_gap = fretboard.width() / max(1, fret_count)
+
+        # Strings
+        for idx in range(strings):
+            y = fretboard.top() + idx * string_gap
+            thickness = 1.2 + (idx * 0.25)
+            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]).lighter(130), thickness))
+            painter.drawLine(QtCore.QPointF(fretboard.left(), y), QtCore.QPointF(fretboard.right(), y))
+
+        # Frets
+        for fret_idx in range(fret_count + 1):
+            x = fretboard.left() + fret_idx * fret_gap
+            is_nut = self.start_fret == 0 and fret_idx == 0
+            width = 3.2 if is_nut else 1.3
+            color = QtGui.QColor(self.theme["group_title"]).darker(108) if is_nut else QtGui.QColor(self.theme["frame"])
+            painter.setPen(QtGui.QPen(color, width))
+            painter.drawLine(QtCore.QPointF(x, fretboard.top()), QtCore.QPointF(x, fretboard.bottom()))
+
+        # Dot markers on common frets for orientation
+        marker_frets = {3, 5, 7, 9, 12, 15}
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["frame"]).lighter(130)))
+        for fret in range(self.start_fret, self.end_fret + 1):
+            if fret not in marker_frets:
+                continue
+            idx = fret - self.start_fret
+            if idx < 0 or idx >= fret_count:
+                continue
+            x = fretboard.left() + (idx + 0.5) * fret_gap
+            y = fretboard.center().y()
+            painter.drawEllipse(QtCore.QPointF(x, y), 2.8, 2.8)
+
+        # Notes
+        for point in self.note_points:
+            idx = point["fret"] - self.start_fret
+            if idx < 0 or idx >= fret_count:
+                continue
+            x = fretboard.left() + (idx + 0.5) * fret_gap
+            y = fretboard.top() + point["string_idx"] * string_gap
+            radius = 12.0 if point["is_root"] else 10.2
+            fill = QtGui.QColor(self.theme["tab_selected_bg"] if point["is_root"] else self.theme.get("positive", "#66d17a"))
+            fg = self.contrast_text(fill)
+            painter.setPen(QtGui.QPen(fill.darker(170), 1.2))
+            painter.setBrush(QtGui.QBrush(fill))
+            painter.drawEllipse(QtCore.QPointF(x, y), radius, radius)
+            painter.setPen(fg)
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(max(8, font.pointSize() - 1))
+            painter.setFont(font)
+            painter.drawText(
+                QtCore.QRectF(x - radius, y - radius, radius * 2, radius * 2),
+                QtCore.Qt.AlignCenter,
+                point["note"],
+            )
+
+        # String labels
+        painter.setPen(QtGui.QColor(self.theme["text"]))
+        label_font = painter.font()
+        label_font.setBold(True)
+        label_font.setPointSize(max(9, label_font.pointSize() - 1))
+        painter.setFont(label_font)
+        string_labels = ["e", "B", "G", "D", "A", "E"]
+        for idx, label in enumerate(string_labels):
+            y = fretboard.top() + idx * string_gap
+            painter.drawText(QtCore.QRectF(panel.left() + 4, y - 10, 20, 20), QtCore.Qt.AlignCenter, label)
+
+        # Fret labels (larger and bolder)
+        fret_font = painter.font()
+        fret_font.setBold(True)
+        fret_font.setPointSize(max(10, fret_font.pointSize()))
+        painter.setFont(fret_font)
+        for idx in range(fret_count):
+            fret = self.start_fret + idx
+            x = fretboard.left() + (idx + 0.5) * fret_gap
+            box = QtCore.QRectF(x - 14, fretboard.bottom() + 6, 28, 18)
+            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"]).lighter(110)))
+            painter.drawRoundedRect(box, 4, 4)
+            painter.setPen(QtGui.QColor(self.theme["text"]))
+            painter.drawText(box, QtCore.Qt.AlignCenter, str(fret))
+
 class CircleOfFifthsWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1910,11 +2376,21 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "ampModel": "auto",
             "fontPreset": "medium",
             "theme": "dark",
+            "theoryScale": "minor_pentatonic",
+            "theoryShape": "g",
             "chain": list(DEFAULT_CHAIN),
             "canvasPositions": {},
             "canvasConnections": [],
         }
         self.connected_chain = []
+        self.summary_selected_key = ""
+        self.summary_best_key = "C"
+        self.summary_style_chords = []
+        self.summary_usual_keys = []
+        self.summary_usual_major_keys = []
+        self.app_config = self.load_app_config()
+        self.feedback_limits_state = self.load_feedback_limiter_state()
+        self.feedback_user_id = self.feedback_user_hash()
 
         self._loading_ui = False
         self.load_state()
@@ -1935,16 +2411,19 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         root.addWidget(self.tabs)
 
         self.builder_tab = QtWidgets.QWidget()
-        self.settings_tab = QtWidgets.QWidget()
-        self.summary_tab = QtWidgets.QWidget()
+        self.rig_setup_tab = QtWidgets.QWidget()
+        self.theory_tab = QtWidgets.QWidget()
+        self.feedback_tab = QtWidgets.QWidget()
 
         self.tabs.addTab(self.builder_tab, "Builder")
-        self.tabs.addTab(self.settings_tab, "Rig Settings")
-        self.tabs.addTab(self.summary_tab, "Rig Summary")
+        self.tabs.addTab(self.rig_setup_tab, "Rig Setup")
+        self.tabs.addTab(self.theory_tab, "Theory")
+        self.tabs.addTab(self.feedback_tab, "Feedback")
 
         self.build_builder_tab()
-        self.build_settings_tab()
-        self.build_summary_tab()
+        self.build_rig_setup_tab()
+        self.build_theory_tab()
+        self.build_feedback_tab()
         self.populate_controls()
         self.bind_builder_events()
         QtCore.QTimer.singleShot(0, self.initialize_splitter_sizes)
@@ -1952,8 +2431,6 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
     def initialize_splitter_sizes(self):
         if hasattr(self, "builder_splitter"):
             self.builder_splitter.setSizes([320, 560, 520])
-        if hasattr(self, "settings_splitter"):
-            self.settings_splitter.setSizes([320, 320, 320, 420])
 
     def build_global_controls(self, root_layout):
         controls = QtWidgets.QFrame()
@@ -2079,8 +2556,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.builder_splitter.setStretchFactor(2, 4)
         layout.addWidget(self.builder_splitter, 1)
 
-    def build_settings_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.settings_tab)
+    def build_rig_setup_tab(self):
+        layout = QtWidgets.QVBoxLayout(self.rig_setup_tab)
         layout.setSpacing(10)
 
         pedals_group = QtWidgets.QGroupBox("Pedal Settings")
@@ -2109,15 +2586,17 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         detail_row.addWidget(amp_group, 1)
         detail_row.addWidget(just_group, 1)
         layout.addLayout(detail_row, 2)
-
-    def build_summary_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.summary_tab)
         summary_group = QtWidgets.QGroupBox("Rig Summary")
-        group_layout = QtWidgets.QVBoxLayout(summary_group)
+        summary_layout = QtWidgets.QVBoxLayout(summary_group)
         self.summary_text = QtWidgets.QTextEdit()
         self.summary_text.setReadOnly(True)
-        group_layout.addWidget(self.summary_text)
-        layout.addWidget(summary_group, 2)
+        self.summary_text.setMinimumHeight(125)
+        summary_layout.addWidget(self.summary_text)
+        layout.addWidget(summary_group, 1)
+
+    def build_theory_tab(self):
+        layout = QtWidgets.QVBoxLayout(self.theory_tab)
+        layout.setSpacing(10)
 
         analysis_row = QtWidgets.QHBoxLayout()
         analysis_row.setSpacing(10)
@@ -2125,7 +2604,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         circle_group = QtWidgets.QGroupBox("Circle of Fifths")
         circle_layout = QtWidgets.QVBoxLayout(circle_group)
         self.circle_of_fifths = CircleOfFifthsWidget()
-        self.circle_hint = QtWidgets.QLabel("Highlighted from suggested concert progression chords.")
+        self.circle_hint = QtWidgets.QLabel("Highlighted from selected Nashville key or suggested style center.")
         self.circle_hint.setWordWrap(True)
         circle_layout.addWidget(self.circle_of_fifths, 1)
         circle_layout.addWidget(self.circle_hint)
@@ -2133,23 +2612,151 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
         nashville_group = QtWidgets.QGroupBox("Nashville Number Chart")
         nashville_layout = QtWidgets.QVBoxLayout(nashville_group)
-        self.nashville_hint = QtWidgets.QLabel("Best-matching key is highlighted based on the progression above.")
+        self.nashville_hint = QtWidgets.QLabel("Select a row to update pentatonic view + theory helpers.")
         self.nashville_hint.setWordWrap(True)
         self.nashville_table = QtWidgets.QTableWidget(len(NASHVILLE_MAJOR_CHART), 8)
         self.nashville_table.setHorizontalHeaderLabels(["Key", "1", "2m", "3m", "4", "5", "6m", "7dim"])
         self.nashville_table.verticalHeader().setVisible(False)
         self.nashville_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.nashville_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-        self.nashville_table.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.nashville_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.nashville_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.nashville_table.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.nashville_table.setAlternatingRowColors(True)
         self.nashville_table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.nashville_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.usual_keys_label = QtWidgets.QLabel("")
+        self.usual_keys_label.setObjectName("usualKeysLabel")
+        self.usual_keys_label.setWordWrap(True)
         nashville_layout.addWidget(self.nashville_hint)
+        nashville_layout.addWidget(self.usual_keys_label)
         nashville_layout.addWidget(self.nashville_table, 1)
         analysis_row.addWidget(nashville_group, 2)
 
-        layout.addLayout(analysis_row, 3)
+        pentatonic_group = QtWidgets.QGroupBox("Scale + CAGED Chart")
+        pentatonic_layout = QtWidgets.QVBoxLayout(pentatonic_group)
+        top_controls = QtWidgets.QHBoxLayout()
+        top_controls.setSpacing(8)
+        top_controls.addWidget(QtWidgets.QLabel("Scale"))
+        self.scale_type_combo = QtWidgets.QComboBox()
+        for scale_key in ["minor_pentatonic", "major_pentatonic", "minor_blues", "major_scale", "natural_minor", "mixolydian"]:
+            self.scale_type_combo.addItem(SCALE_LIBRARY[scale_key]["label"], scale_key)
+        self.set_combo_by_data(self.scale_type_combo, self.state.get("theoryScale", "minor_pentatonic"))
+        top_controls.addWidget(self.scale_type_combo, 1)
+        top_controls.addWidget(QtWidgets.QLabel("CAGED Shape"))
+        self.pentatonic_shape_combo = QtWidgets.QComboBox()
+        for shape_key in ["c", "a", "g", "e", "d"]:
+            self.pentatonic_shape_combo.addItem(CAGED_SHAPES[shape_key]["label"], shape_key)
+        self.set_combo_by_data(self.pentatonic_shape_combo, self.state.get("theoryShape", "g"))
+        top_controls.addWidget(self.pentatonic_shape_combo, 1)
+        pentatonic_layout.addLayout(top_controls)
+
+        self.pentatonic_hint = QtWidgets.QLabel("Shape map for selected key center.")
+        self.pentatonic_hint.setWordWrap(True)
+        pentatonic_layout.addWidget(self.pentatonic_hint)
+        self.pentatonic_neck = PentatonicNeckWidget()
+        pentatonic_layout.addWidget(self.pentatonic_neck, 2)
+
+        self.key_toolkit_text = QtWidgets.QTextEdit()
+        self.key_toolkit_text.setReadOnly(True)
+        self.key_toolkit_text.setMinimumHeight(120)
+        pentatonic_layout.addWidget(self.key_toolkit_text, 1)
+        analysis_row.addWidget(pentatonic_group, 2)
+
+        layout.addLayout(analysis_row, 1)
         self.populate_nashville_table()
+        self.nashville_table.itemSelectionChanged.connect(self.on_nashville_selection_changed)
+        self.pentatonic_shape_combo.currentIndexChanged.connect(self.on_pentatonic_shape_changed)
+        self.scale_type_combo.currentIndexChanged.connect(self.on_scale_type_changed)
+
+    def build_feedback_tab(self):
+        layout = QtWidgets.QVBoxLayout(self.feedback_tab)
+        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setSpacing(10)
+
+        feedback_group = QtWidgets.QGroupBox("Feedback")
+        feedback_layout = QtWidgets.QVBoxLayout(feedback_group)
+        form_layout = QtWidgets.QFormLayout()
+        form_layout.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        form_layout.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        form_layout.setHorizontalSpacing(12)
+        form_layout.setVerticalSpacing(10)
+        form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+
+        self.feedback_name_input = QtWidgets.QLineEdit()
+        self.feedback_name_input.setPlaceholderText("Name (optional)")
+        self.feedback_email_input = QtWidgets.QLineEdit()
+        self.feedback_email_input.setPlaceholderText("Email (optional)")
+        self.feedback_rating_combo = QtWidgets.QComboBox()
+        for text, value in [("5 - Excellent", 5), ("4 - Good", 4), ("3 - Okay", 3), ("2 - Needs work", 2), ("1 - Rough", 1)]:
+            self.feedback_rating_combo.addItem(text, value)
+        self.feedback_type_combo = QtWidgets.QComboBox()
+        for label, key in [
+            ("Tone Recommendation", "tone"),
+            ("UI / UX", "ui"),
+            ("Feature Request", "feature"),
+            ("Bug Report", "bug"),
+            ("General", "general"),
+        ]:
+            self.feedback_type_combo.addItem(label, key)
+        self.feedback_message_input = QtWidgets.QTextEdit()
+        self.feedback_message_input.setPlaceholderText("Tell us what worked, what did not, and what to improve.")
+        self.feedback_message_input.setMinimumHeight(180)
+        self.feedback_message_input.setMaximumHeight(220)
+        for widget in [self.feedback_name_input, self.feedback_email_input, self.feedback_rating_combo, self.feedback_type_combo]:
+            widget.setMinimumHeight(34)
+            widget.setMinimumWidth(360)
+        self.feedback_message_input.setMinimumWidth(360)
+
+        form_layout.addRow("Name", self.feedback_name_input)
+        form_layout.addRow("Email", self.feedback_email_input)
+        form_layout.addRow("Rating", self.feedback_rating_combo)
+        form_layout.addRow("Type", self.feedback_type_combo)
+        form_layout.addRow("Message", self.feedback_message_input)
+        feedback_layout.addLayout(form_layout)
+
+        submit_row = QtWidgets.QHBoxLayout()
+        self.feedback_submit_btn = QtWidgets.QPushButton("Submit Feedback")
+        self.feedback_submit_btn.setMinimumHeight(36)
+        self.feedback_submit_btn.setMinimumWidth(170)
+        self.feedback_status_label = QtWidgets.QLabel("")
+        self.feedback_status_label.setWordWrap(True)
+        self.feedback_status_label.setMinimumHeight(36)
+        submit_row.addWidget(self.feedback_submit_btn)
+        submit_row.addWidget(self.feedback_status_label, 1)
+        feedback_layout.addLayout(submit_row)
+
+        self.feedback_limit_label = QtWidgets.QLabel("")
+        self.feedback_limit_label.setWordWrap(True)
+        feedback_layout.addWidget(self.feedback_limit_label)
+        top_row.addWidget(feedback_group, 4)
+
+        donate_group = QtWidgets.QGroupBox("Support Development")
+        donate_layout = QtWidgets.QVBoxLayout(donate_group)
+        donate_layout.addWidget(QtWidgets.QLabel("Choose a method and open/send directly:"))
+        donate_row = QtWidgets.QHBoxLayout()
+        donate_row.setSpacing(8)
+        self.donate_method_combo = QtWidgets.QComboBox()
+        for label, key in [("PayPal", "paypal"), ("Venmo", "venmo"), ("Zelle", "zelle")]:
+            self.donate_method_combo.addItem(label, key)
+        self.donate_btn = QtWidgets.QPushButton("Donate")
+        self.donate_method_combo.setMinimumHeight(34)
+        self.donate_btn.setMinimumHeight(34)
+        donate_row.addWidget(self.donate_method_combo, 1)
+        donate_row.addWidget(self.donate_btn)
+        donate_layout.addLayout(donate_row)
+        self.donate_details_label = QtWidgets.QLabel("")
+        self.donate_details_label.setWordWrap(True)
+        donate_layout.addWidget(self.donate_details_label)
+        donate_layout.addStretch(1)
+        top_row.addWidget(donate_group, 2)
+
+        layout.addLayout(top_row, 1)
+
+        self.feedback_submit_btn.clicked.connect(self.submit_feedback)
+        self.donate_btn.clicked.connect(self.handle_donate)
 
     def make_info_panel(self, title):
         group = QtWidgets.QGroupBox(title)
@@ -2201,20 +2808,156 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
                 item.setTextAlignment(align)
                 self.nashville_table.setItem(row, col, item)
 
-    def highlight_nashville_key(self, key_name):
+    def table_row_for_key(self, key_name):
+        for row in range(self.nashville_table.rowCount()):
+            item = self.nashville_table.item(row, 0)
+            if item and item.text() == key_name:
+                return row
+        return -1
+
+    def selected_nashville_key(self):
+        model = self.nashville_table.selectionModel()
+        if not model:
+            return ""
+        rows = model.selectedRows()
+        if not rows:
+            return ""
+        row = rows[0].row()
+        item = self.nashville_table.item(row, 0)
+        return item.text() if item else ""
+
+    def set_nashville_selected_key(self, key_name):
+        row = self.table_row_for_key(key_name)
+        self.nashville_table.blockSignals(True)
+        self.nashville_table.clearSelection()
+        if row >= 0:
+            self.nashville_table.selectRow(row)
+            self.nashville_table.setCurrentCell(row, 0)
+        self.nashville_table.blockSignals(False)
+
+    def highlight_nashville_key(self, key_name, usual_major_keys=None):
         theme = theme_for_key(self.state.get("theme", "dark"))
         normal_bg = QtGui.QColor(theme["panel"])
         normal_fg = QtGui.QColor(theme["text"])
+        positive_bg = QtGui.QColor(theme.get("positive", "#66d17a"))
+        positive_bg.setAlpha(80)
         highlight_bg = QtGui.QColor(theme["tab_selected_bg"])
         highlight_fg = QtGui.QColor(theme["tab_selected_fg"])
+        usual_set = set(usual_major_keys or [])
         for row in range(self.nashville_table.rowCount()):
-            is_match = self.nashville_table.item(row, 0).text() == key_name
+            key_item = self.nashville_table.item(row, 0)
+            row_key = key_item.text() if key_item else ""
+            is_match = row_key == key_name
+            is_usual = row_key in usual_set
             for col in range(self.nashville_table.columnCount()):
                 item = self.nashville_table.item(row, col)
                 if item is None:
                     continue
-                item.setBackground(highlight_bg if is_match else normal_bg)
-                item.setForeground(highlight_fg if is_match else normal_fg)
+                if is_match:
+                    item.setBackground(highlight_bg)
+                    item.setForeground(highlight_fg)
+                elif is_usual:
+                    item.setBackground(positive_bg)
+                    item.setForeground(normal_fg)
+                else:
+                    item.setBackground(normal_bg)
+                    item.setForeground(normal_fg)
+                font = item.font()
+                font.setBold(is_match or is_usual)
+                item.setFont(font)
+
+    def update_summary_key_visuals(self, selected_key):
+        if not selected_key:
+            return
+        self.summary_selected_key = selected_key
+        selected_chords = nashville_degrees_for_key(selected_key)
+        if selected_chords:
+            self.circle_of_fifths.set_highlighted_chords(selected_chords)
+            self.circle_hint.setText(f"Selected key {selected_key} highlights: " + ", ".join(selected_chords))
+        else:
+            self.circle_of_fifths.set_highlighted_chords(self.summary_style_chords)
+            self.circle_hint.setText("Highlighted chords: " + ", ".join(self.summary_style_chords))
+
+        self.highlight_nashville_key(selected_key, self.summary_usual_major_keys)
+        if selected_key == self.summary_best_key:
+            self.nashville_hint.setText(f"Selected key: {selected_key} (matches suggested key)")
+        else:
+            self.nashville_hint.setText(
+                f"Suggested key: {self.summary_best_key} | Selected key: {selected_key}"
+            )
+        self.refresh_theory_panel(selected_key)
+
+    def on_nashville_selection_changed(self):
+        selected_key = self.selected_nashville_key()
+        if not selected_key:
+            return
+        self.update_summary_key_visuals(selected_key)
+
+    def on_pentatonic_shape_changed(self):
+        if hasattr(self, "pentatonic_shape_combo"):
+            selected = self.pentatonic_shape_combo.currentData()
+            if selected in CAGED_SHAPES:
+                self.state["theoryShape"] = selected
+        self.refresh_theory_panel(self.selected_theory_key())
+        self.persist_state(silent=True)
+
+    def on_scale_type_changed(self):
+        if hasattr(self, "scale_type_combo"):
+            selected = self.scale_type_combo.currentData()
+            if selected in SCALE_LIBRARY:
+                self.state["theoryScale"] = selected
+        self.refresh_theory_panel(self.selected_theory_key())
+        self.persist_state(silent=True)
+
+    def selected_theory_key(self):
+        selected = self.selected_nashville_key()
+        if selected:
+            return selected
+        if self.summary_selected_key:
+            return self.summary_selected_key
+        if self.summary_best_key:
+            return self.summary_best_key
+        return "C"
+
+    def build_key_toolkit_lines(self, key_name, scale_key="minor_pentatonic"):
+        key_label, degrees = key_row_for_name(key_name)
+        scale = SCALE_LIBRARY.get(scale_key, SCALE_LIBRARY["minor_pentatonic"])
+        if len(degrees) < 7:
+            return [
+                f"Key Center: {key_label} major",
+                f"Scale: {scale['label']} ({scale['formula']})",
+            ]
+        one, two, three, four, five, six, seven = degrees
+        return [
+            f"Key Center: {key_label} major",
+            f"Scale: {scale['label']} ({scale['formula']})",
+            f"Relative Minor: {six}",
+            "Diatonic Triads: " + ", ".join(degrees),
+            f"Cadence (I-IV-V): {one} - {four} - {five}",
+            f"Cadence (ii-V-I): {two} - {five} - {one}",
+            f"Pop Turnaround (vi-IV-I-V): {six} - {four} - {one} - {five}",
+            f"Solo Target: use {six} or {key_label} pentatonic color over these chords.",
+        ]
+
+    def refresh_theory_panel(self, key_name):
+        if not hasattr(self, "pentatonic_neck"):
+            return
+        active_key = key_name or "C"
+        if self.table_row_for_key(active_key) < 0:
+            active_key = self.summary_best_key or "C"
+        shape_key = "g"
+        if hasattr(self, "pentatonic_shape_combo"):
+            shape_key = self.pentatonic_shape_combo.currentData() or "g"
+        scale_key = "minor_pentatonic"
+        if hasattr(self, "scale_type_combo"):
+            scale_key = self.scale_type_combo.currentData() or "minor_pentatonic"
+        scale = SCALE_LIBRARY.get(scale_key, SCALE_LIBRARY["minor_pentatonic"])
+        self.pentatonic_neck.set_selection(active_key, shape_key, scale_key)
+        self.pentatonic_hint.setText(
+            f"{self.pentatonic_neck.summary_text()}  |  Formula: {scale.get('formula', '')}"
+        )
+        if hasattr(self, "key_toolkit_text"):
+            self.key_toolkit_text.setPlainText("\n".join(self.build_key_toolkit_lines(active_key, scale_key)))
 
     def add_control_column(self, layout, label_text, widget):
         wrapper_widget = QtWidgets.QWidget()
@@ -2867,8 +3610,9 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.chain_summary.setText(f"Connected chain: {connected_text}\nActive pedals: {active_text}")
 
         self.render_builder_preview(recommendation)
-        self.render_settings_tab(recommendation)
+        self.render_rig_setup_tab(recommendation)
         self.render_summary_tab(recommendation)
+        self.render_feedback_tab()
 
     def render_builder_preview(self, recommendation):
         guitar = recommendation.get("guitar")
@@ -2911,7 +3655,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         ]
         self.playbook_preview.setPlainText("\n".join(pb_lines))
 
-    def render_settings_tab(self, recommendation):
+    def render_rig_setup_tab(self, recommendation):
         self.clear_layout_widgets(self.pedal_cards_grid)
         if self.connected_chain:
             self.pedal_empty_label.hide()
@@ -3009,6 +3753,13 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         unpatched = [pid for pid in self.state["chain"] if pid not in self.connected_chain]
         style_chords = extract_concert_chords_for_genre(self.state["genre"])
         best_key = determine_best_nashville_key(style_chords)
+        usual_keys = usual_keys_for_genre(self.state["genre"])
+        usual_major_keys = major_usual_keys_for_genre(self.state["genre"])
+        self.summary_style_chords = style_chords
+        self.summary_best_key = best_key
+        self.summary_usual_keys = usual_keys
+        self.summary_usual_major_keys = usual_major_keys
+
         bullets = [
             f"- Style: {recommendation['label']}",
             f"- Guitar: {'Acoustic' if self.state['guitarType'] == 'acoustic' else 'Electric'} | Profile: {recommendation['guitar']['label'] if recommendation.get('guitar') else 'Default'}",
@@ -3023,13 +3774,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             bullets.append("- Not currently chained to amp: " + ", ".join(PEDAL_LIBRARY[pid] for pid in unpatched))
 
         self.summary_text.setPlainText("\n".join(bullets))
-        self.circle_of_fifths.set_highlighted_chords(style_chords)
-        if style_chords:
-            self.circle_hint.setText("Highlighted chords: " + ", ".join(style_chords))
+        if usual_keys:
+            self.usual_keys_label.setText("Usual Keys: " + "  •  ".join(usual_keys))
         else:
-            self.circle_hint.setText("No style progression chords available.")
-        self.highlight_nashville_key(best_key)
-        self.nashville_hint.setText(f"Best-matching key highlighted: {best_key}")
+            self.usual_keys_label.setText("Usual Keys: (none)")
+
+        active_key = self.summary_selected_key if self.table_row_for_key(self.summary_selected_key) >= 0 else best_key
+        if not active_key:
+            active_key = best_key
+        self.set_nashville_selected_key(active_key)
+        self.update_summary_key_visuals(active_key)
 
     def calculate_tone_match(self, chain, optimized_chain):
         if not chain:
@@ -3055,6 +3809,232 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if not chain:
             return "Guitar -> (empty) -> AMP"
         return "Guitar -> " + " -> ".join(PEDAL_LIBRARY[pid] for pid in chain) + " -> AMP"
+
+    def load_app_config(self):
+        config = copy.deepcopy(DEFAULT_APP_CONFIG)
+        for path in config_path_candidates():
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                deep_merge_dict(config, payload)
+                break
+        return config
+
+    def feedback_user_hash(self):
+        raw = f"{socket.gethostname()}|{uuid.getnode():012x}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def load_feedback_limiter_state(self):
+        fallback = {"total": 0, "daily": {}, "users": {}}
+        if not FEEDBACK_LIMITER_FILE.exists():
+            return fallback
+        try:
+            payload = json.loads(FEEDBACK_LIMITER_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return fallback
+        if not isinstance(payload, dict):
+            return fallback
+        total = payload.get("total", 0)
+        daily = payload.get("daily", {})
+        users = payload.get("users", {})
+        return {
+            "total": int(total) if isinstance(total, (int, float)) else 0,
+            "daily": daily if isinstance(daily, dict) else {},
+            "users": users if isinstance(users, dict) else {},
+        }
+
+    def persist_feedback_limiter_state(self):
+        FEEDBACK_LIMITER_FILE.write_text(json.dumps(self.feedback_limits_state, indent=2), encoding="utf-8")
+
+    def feedback_limits(self):
+        feedback_cfg = self.app_config.get("feedback", {})
+        limiter = feedback_cfg.get("limiter", {})
+        return {
+            "max_per_day": max(0, int(limiter.get("max_per_day", 0) or 0)),
+            "max_per_user_per_day": max(0, int(limiter.get("max_per_user_per_day", 0) or 0)),
+            "max_per_user_total": max(0, int(limiter.get("max_per_user_total", 0) or 0)),
+            "hard_limit_total": max(0, int(limiter.get("hard_limit_total", 0) or 0)),
+        }
+
+    def feedback_day_key(self):
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def user_feedback_counters(self, user_id):
+        users = self.feedback_limits_state.setdefault("users", {})
+        user_state = users.setdefault(user_id, {"total": 0, "daily": {}})
+        if not isinstance(user_state.get("daily"), dict):
+            user_state["daily"] = {}
+        if not isinstance(user_state.get("total"), (int, float)):
+            user_state["total"] = 0
+        return user_state
+
+    def check_feedback_limit(self, user_id):
+        limits = self.feedback_limits()
+        day = self.feedback_day_key()
+        total = int(self.feedback_limits_state.get("total", 0))
+        daily_total = int(self.feedback_limits_state.setdefault("daily", {}).get(day, 0))
+        user_state = self.user_feedback_counters(user_id)
+        user_total = int(user_state.get("total", 0))
+        user_daily = int(user_state.setdefault("daily", {}).get(day, 0))
+
+        if limits["hard_limit_total"] and total >= limits["hard_limit_total"]:
+            return False, "Global feedback cap reached."
+        if limits["max_per_day"] and daily_total >= limits["max_per_day"]:
+            return False, "Daily feedback limit reached."
+        if limits["max_per_user_per_day"] and user_daily >= limits["max_per_user_per_day"]:
+            return False, "You reached your daily submission limit."
+        if limits["max_per_user_total"] and user_total >= limits["max_per_user_total"]:
+            return False, "You reached your account submission limit."
+        return True, ""
+
+    def increment_feedback_limit(self, user_id):
+        day = self.feedback_day_key()
+        self.feedback_limits_state["total"] = int(self.feedback_limits_state.get("total", 0)) + 1
+        daily = self.feedback_limits_state.setdefault("daily", {})
+        daily[day] = int(daily.get(day, 0)) + 1
+        user_state = self.user_feedback_counters(user_id)
+        user_state["total"] = int(user_state.get("total", 0)) + 1
+        user_daily = user_state.setdefault("daily", {})
+        user_daily[day] = int(user_daily.get(day, 0)) + 1
+        self.persist_feedback_limiter_state()
+
+    def set_feedback_status(self, text, success=False):
+        if not hasattr(self, "feedback_status_label"):
+            return
+        self.feedback_status_label.setText(text)
+        theme = theme_for_key(self.state.get("theme", "dark"))
+        color = theme.get("positive", "#66d17a") if success else "#f19090"
+        self.feedback_status_label.setStyleSheet(f"color: {color}; font-weight: 700;")
+
+    def update_feedback_limit_label(self):
+        if not hasattr(self, "feedback_limit_label"):
+            return
+        feedback_cfg = self.app_config.get("feedback", {})
+        limits = self.feedback_limits()
+        webhook = str(feedback_cfg.get("webhook_url", "") or "").strip()
+        enabled = bool(feedback_cfg.get("enabled", True)) and bool(webhook)
+        day = self.feedback_day_key()
+        user_state = self.user_feedback_counters(self.feedback_user_id)
+        day_total = int(self.feedback_limits_state.setdefault("daily", {}).get(day, 0))
+        user_day_total = int(user_state.setdefault("daily", {}).get(day, 0))
+        user_total = int(user_state.get("total", 0))
+
+        def remaining(limit, used):
+            if not limit:
+                return "∞"
+            return str(max(0, limit - used))
+
+        lines = [
+            f"Webhook: {'Configured' if webhook else 'Not configured'}",
+            f"Feedback Enabled: {'Yes' if enabled else 'No'}",
+            "Limits - "
+            f"Day Remaining: {remaining(limits['max_per_day'], day_total)} | "
+            f"Your Day Remaining: {remaining(limits['max_per_user_per_day'], user_day_total)} | "
+            f"Your Total Remaining: {remaining(limits['max_per_user_total'], user_total)}",
+        ]
+        self.feedback_limit_label.setText("\n".join(lines))
+
+    def render_feedback_tab(self):
+        if not hasattr(self, "donate_details_label"):
+            return
+        donate_cfg = self.app_config.get("donate", {})
+        paypal = str(donate_cfg.get("paypal_url", "") or "").strip()
+        venmo = str(donate_cfg.get("venmo_url", "") or "").strip()
+        zelle = str(donate_cfg.get("zelle_handle", "") or "").strip()
+        lines = [
+            f"PayPal: {'Configured' if paypal else 'Not configured'}",
+            f"Venmo: {'Configured' if venmo else 'Not configured'}",
+            f"Zelle: {'Configured' if zelle else 'Not configured'}",
+        ]
+        self.donate_details_label.setText("\n".join(lines))
+        self.update_feedback_limit_label()
+
+    def handle_donate(self):
+        method = self.donate_method_combo.currentData() if hasattr(self, "donate_method_combo") else "paypal"
+        donate_cfg = self.app_config.get("donate", {})
+        target_map = {
+            "paypal": str(donate_cfg.get("paypal_url", "") or "").strip(),
+            "venmo": str(donate_cfg.get("venmo_url", "") or "").strip(),
+            "zelle": str(donate_cfg.get("zelle_handle", "") or "").strip(),
+        }
+        target = target_map.get(method, "")
+        if not target:
+            self.set_feedback_status(f"{method.title()} is not configured yet.", success=False)
+            return
+        if method in {"paypal", "venmo"}:
+            if not QtGui.QDesktopServices.openUrl(QtCore.QUrl(target)):
+                self.set_feedback_status(f"Could not open {method.title()} link.", success=False)
+                return
+            self.set_feedback_status(f"Opened {method.title()}.", success=True)
+            return
+        QtWidgets.QApplication.clipboard().setText(target)
+        self.set_feedback_status("Zelle destination copied to clipboard.", success=True)
+
+    def submit_feedback(self):
+        message = self.feedback_message_input.toPlainText().strip() if hasattr(self, "feedback_message_input") else ""
+        if len(message) < 8:
+            self.set_feedback_status("Please enter at least a short message before submitting.", success=False)
+            return
+
+        feedback_cfg = self.app_config.get("feedback", {})
+        webhook = str(feedback_cfg.get("webhook_url", "") or "").strip()
+        if not feedback_cfg.get("enabled", True) or not webhook:
+            self.set_feedback_status("Feedback webhook is not configured for this build.", success=False)
+            return
+
+        allowed, reason = self.check_feedback_limit(self.feedback_user_id)
+        if not allowed:
+            self.set_feedback_status(reason, success=False)
+            return
+
+        payload = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "user": self.feedback_user_id,
+            "rating": int(self.feedback_rating_combo.currentData() or 0),
+            "type": str(self.feedback_type_combo.currentData() or "general"),
+            "name": self.feedback_name_input.text().strip(),
+            "email": self.feedback_email_input.text().strip(),
+            "message": message,
+            "context": {
+                "genre": self.state.get("genre"),
+                "guitarType": self.state.get("guitarType"),
+                "guitarProfile": self.state.get("guitarProfile"),
+                "ampModel": self.state.get("ampModel"),
+                "theme": self.state.get("theme"),
+                "connectedChain": list(self.connected_chain),
+            },
+        }
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            webhook,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        timeout_sec = max(2, int(feedback_cfg.get("timeout_sec", 8) or 8))
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+                status = int(response.getcode() or 200)
+        except urllib.error.URLError as exc:
+            self.set_feedback_status(f"Submit failed: {exc}", success=False)
+            return
+        except Exception as exc:
+            self.set_feedback_status(f"Submit failed: {exc}", success=False)
+            return
+
+        if status < 200 or status >= 300:
+            self.set_feedback_status(f"Submit failed: HTTP {status}", success=False)
+            return
+
+        self.increment_feedback_limit(self.feedback_user_id)
+        self.feedback_message_input.clear()
+        self.set_feedback_status("Feedback sent. Thank you.", success=True)
+        self.update_feedback_limit_label()
 
     def load_state(self):
         if not STATE_FILE.exists():
@@ -3083,6 +4063,14 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         theme_key = payload.get("theme")
         if theme_key in THEMES:
             self.state["theme"] = theme_key
+
+        theory_scale = payload.get("theoryScale")
+        if theory_scale in SCALE_LIBRARY:
+            self.state["theoryScale"] = theory_scale
+
+        theory_shape = payload.get("theoryShape")
+        if theory_shape in CAGED_SHAPES:
+            self.state["theoryShape"] = theory_shape
 
         font_preset = payload.get("fontPreset")
         if font_preset in FONT_PRESETS:
@@ -3122,6 +4110,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarProfile": self.state["guitarProfile"],
             "ampModel": self.state["ampModel"],
             "theme": self.state["theme"],
+            "theoryScale": self.state.get("theoryScale", "minor_pentatonic"),
+            "theoryShape": self.state.get("theoryShape", "g"),
             "fontPreset": self.state["fontPreset"],
             "fontSize": font_pixels_for_preset(self.state["fontPreset"]),
             "chain": self.state["chain"],
@@ -3144,9 +4134,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QTabBar::tab:selected {{ background: {theme["tab_selected_bg"]}; color: {theme["tab_selected_fg"]}; font-weight: 700; }}
             QGroupBox {{ border: 1px solid {theme["frame"]}; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {theme["group_title"]}; }}
-            QComboBox, QListWidget, QTextEdit, QPushButton {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
+            QComboBox, QListWidget, QTextEdit, QPushButton, QLineEdit, QTableWidget {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
             QFrame#pedalSettingsCard {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 8px; }}
             QLabel#pedalCardTitle {{ font-weight: 700; color: {theme["group_title"]}; }}
+            QLabel#usualKeysLabel {{ color: {theme.get("positive", "#66d17a")}; font-weight: 700; }}
             QPushButton:hover {{ border: 1px solid {theme["tab_selected_bg"]}; }}
             QLabel {{ color: {theme["text"]}; }}
             """
@@ -3155,9 +4146,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.board_canvas.set_theme(theme)
         if hasattr(self, "circle_of_fifths"):
             self.circle_of_fifths.set_theme(theme)
+        if hasattr(self, "pentatonic_neck"):
+            self.pentatonic_neck.set_theme(theme)
         if hasattr(self, "nashville_table"):
-            key_name = determine_best_nashville_key(extract_concert_chords_for_genre(self.state.get("genre", "rock")))
-            self.highlight_nashville_key(key_name)
+            active_key = self.summary_selected_key or self.summary_best_key
+            if not active_key:
+                active_key = determine_best_nashville_key(extract_concert_chords_for_genre(self.state.get("genre", "rock")))
+            usual_major = self.summary_usual_major_keys or major_usual_keys_for_genre(self.state.get("genre", "rock"))
+            self.highlight_nashville_key(active_key, usual_major)
+        if hasattr(self, "feedback_limit_label"):
+            self.update_feedback_limit_label()
 
 
 def main():

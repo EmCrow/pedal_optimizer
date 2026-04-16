@@ -6,6 +6,7 @@ secure_package/*.decrypted.tar.gz
 __pycache__/
 *.pyc
 .pedal_architect_py_state.json
+.pedal_architect_feedback_limits.json
 PedalArchitect/
 PedalArchitect.app/
 build/

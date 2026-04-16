@@ -9,7 +9,7 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Genre presets including `Hip Hop`.
 - Guitar mode + guitar profile controls.
 - Amp model selection (`Auto`, Orange, Marshall, Fender Acoustic, Twin, Vox, Mesa).
-- `Builder`, `Rig Settings`, and `Rig Summary` tabs.
+- `Builder`, `Rig Setup`, `Theory`, and `Feedback` tabs.
 - Persistent local state in `.pedal_architect_py_state.json`.
 - Adjustable UI `Font Size` preset dropdown (`Small`, `Medium`, `Large`, `XL`) with persisted selection.
 - Resizable split-panel layout so builder/settings columns scale with the window.
@@ -19,11 +19,15 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Guitar-to-pedal-to-amp cabling is explicit; only the connected path from guitar into amp is used for final recommendations.
 - Pedal cards include `x` remove and side `~` disconnect buttons for quick edits.
 - `Clean Up Layout` arranges connected pedals in a right-to-left horizontal signal row first, then wraps.
-- Color scheme presets: `Dark`, `Light`, `Sunset`, and `Ocean`.
+- Color scheme presets: `Dark`, `Light`, `Sunset`, `Ocean`, `Prism (Floyd)`, `Brown Sound (VH)`, and `Paisley Prairie`.
 - Global top controls (including `Style`) stay visible while switching tabs.
 - Amp node uses brand-adjacent color treatment per selected amp model.
-- Rig Settings uses bordered pedal cards (wrap every 5) plus a dedicated second row for guitar/amp/justification.
-- Rig Summary includes a Circle of Fifths (highlighted style chords) and a Nashville number chart.
+- Rig Setup tab contains pedal settings cards (wrap every 5), Guitar/Amp/Justification columns, and Rig Summary.
+- Theory tab contains Circle of Fifths + selectable Nashville chart + key-aware CAGED scale neck visual.
+- Theory tab scale chart now supports multiple scales (minor/major pentatonic, minor blues, major scale, natural minor, mixolydian).
+- Additional theory helpers include cadence mapping (`I-IV-V`, `ii-V-I`, `vi-IV-I-V`) and relative-minor guidance.
+- Feedback tab sends JSON payloads to a configurable webhook with persistent anti-spam rate limiting.
+- Donate flow supports PayPal, Venmo, and Zelle from `pyqt_app_config.json`.
 
 ## Run
 
@@ -31,6 +35,8 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 python3 -m pip install -r requirements-pyqt.txt
 python3 pyqt_app.py
 ```
+
+Configure feedback/donate values in `pyqt_app_config.json` before building/distributing.
 
 ## Build Contained App
 
