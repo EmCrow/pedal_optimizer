@@ -15,6 +15,7 @@ const {
   AUTO_AMP_BY_GENRE,
   GUITAR_PROFILES,
   AUTO_GUITAR_PROFILE_BY_TYPE,
+  STYLE_PLAYBOOK,
 } = window.APP_DATA;
 
 const state = {
@@ -40,6 +41,7 @@ const elements = {
   emptyHint: document.getElementById("emptyHint"),
   chainScore: document.getElementById("chainScore"),
   chainSummary: document.getElementById("chainSummary"),
+  ampMusicGuide: document.getElementById("ampMusicGuide"),
   recommendationMeta: document.getElementById("recommendationMeta"),
   settingsOutput: document.getElementById("settingsOutput"),
   guitarVisual: document.getElementById("guitarVisual"),
@@ -49,6 +51,19 @@ const elements = {
   summaryOutput: document.getElementById("summaryOutput"),
   guidanceList: document.getElementById("guidanceList"),
   toast: document.getElementById("toast"),
+};
+
+const orderLabCache = new Map();
+const PEDAL_NOTE_PATTERNS = {
+  cs3: ["cs-3", "cs3", "compression sustainer", "compressor"],
+  sd1: ["sd-1", "sd1", "super overdrive"],
+  bd2: ["bd-2", "bd2", "blues driver"],
+  ds1: ["ds-1", "ds1", "distortion"],
+  ge7: ["ge-7", "ge7"],
+  eq10: ["10-band", "10 band", "10-band eq", "eq10", "10 channel"],
+  ch1: ["ch-1", "ch1", "chorus"],
+  dd3: ["dd-3", "dd3", "delay"],
+  rc30: ["rc-30", "rc30", "loop station", "looper"],
 };
 
 loadSavedState();
@@ -154,11 +169,15 @@ function bindEvents() {
   });
 
   elements.optimizeBtn.addEventListener("click", () => {
-    const preset = GENRE_PRESETS[state.genre];
-    state.chain = sanitizeChain([...preset.optimizedChain]);
+    const preset = GENRE_PRESETS[state.genre] || GENRE_PRESETS.metal;
+    const seedChain = state.chain.length ? state.chain : preset.optimizedChain;
+    const orderAnalysis = runOrderLab(state.genre, seedChain, state.guitarType);
+    state.chain = sanitizeChain([...orderAnalysis.bestChain]);
     renderAll();
     persistState();
-    showToast(`${preset.label} chain loaded.`);
+    showToast(
+      `${preset.label} optimized (${formatNumber(orderAnalysis.permutationsChecked)} layouts checked).`,
+    );
   });
 
   elements.resetBtn.addEventListener("click", () => {
@@ -336,6 +355,7 @@ function renderAll() {
   renderPedalBank(recommendation);
   renderChain(recommendation);
   renderAmpNode(recommendation.amp, recommendation.ampModelKey, recommendation.ampLabel);
+  renderAmpMusicGuide(state.genre);
   renderGuitarVisual(recommendation.guitar);
   renderRecommendations(recommendation);
 }
@@ -403,8 +423,6 @@ function renderAmpNode(ampSettings, ampModelKey = null, ampLabel = "Amp") {
   const modelLabel = ampSettings.modelLabel || ampLabel || "Amp";
   const voicing = ampSettings.voicing || "Custom";
   elements.ampNode.innerHTML = `
-    <span class="amp-label">Fixed End</span>
-    <span class="node-arrow" aria-hidden="true">&rarr;</span>
     <section class="amp-rig ${brandClass}" aria-label="${modelLabel} amp settings">
       <div class="amp-head">
         <div class="amp-head-top">
@@ -416,6 +434,46 @@ function renderAmpNode(ampSettings, ampModelKey = null, ampLabel = "Amp") {
       <div class="amp-cabinet">
         <div class="amp-grill-cloth"></div>
       </div>
+    </section>
+  `;
+}
+
+function renderAmpMusicGuide(genreKey) {
+  if (!elements.ampMusicGuide) {
+    return;
+  }
+
+  const guide = STYLE_PLAYBOOK[genreKey] || STYLE_PLAYBOOK.rock;
+  if (!guide) {
+    elements.ampMusicGuide.innerHTML = "";
+    return;
+  }
+
+  const heardProgressions = Array.isArray(guide.concertProgression)
+    ? guide.concertProgression
+    : Array.isArray(guide.progression)
+      ? guide.progression
+      : [];
+  const capoShapeProgressions = Array.isArray(guide.capo5Shapes) ? guide.capo5Shapes : [];
+  const shapes = Array.isArray(guide.openShapes) ? guide.openShapes : [];
+  const heardLines = heardProgressions.map((line) => `<li>${line}</li>`).join("");
+  const shapeProgressionLines = (capoShapeProgressions.length ? capoShapeProgressions : heardProgressions)
+    .map((line) => `<li>${line}</li>`)
+    .join("");
+  const shapeText = shapes.length ? shapes.join(", ") : "N/A";
+  const pentatonicFret = guide.pentatonicFret || "G-shape pentatonic around the 8th fret.";
+
+  elements.ampMusicGuide.innerHTML = `
+    <section class="amp-music-guide-card">
+      <h4>Style Progressions</h4>
+      <p><strong>Heard Chords:</strong></p>
+      <ul class="amp-guide-list">${heardLines}</ul>
+      <p><strong>Play These Shapes (Capo 5):</strong></p>
+      <ul class="amp-guide-list">${shapeProgressionLines}</ul>
+      <p><strong>Open Shapes Used:</strong> ${shapeText}</p>
+      <p><strong>Capo Mapping:</strong> ${guide.capoGuide || "Capo 5 recommended for tighter range."}</p>
+      <p><strong>G-Shape Pentatonic Fret:</strong> ${pentatonicFret}</p>
+      <p><strong>Solo Guide:</strong> ${guide.soloGuide || "Solo around G-shape pentatonic phrasing."}</p>
     </section>
   `;
 }
@@ -557,8 +615,13 @@ function renderRecommendations(recommendation) {
   const guitarLabel = state.guitarType === "acoustic" ? "Acoustic" : "Electric";
   const guitarProfileLabel = recommendation.guitar?.label || "Guitar";
   const ampLabel = recommendation.ampLabel || "Amp";
+  const orderLabLine = recommendation.orderAnalysis
+    ? `<br><span class="order-lab-meta">Order Lab: ${formatNumber(
+        recommendation.orderAnalysis.permutationsChecked,
+      )} layouts scored (exhaustive search across every pedal position).</span>`
+    : "";
   elements.recommendationMeta.innerHTML = `
-    <p><strong>${recommendation.label}</strong> | ${guitarLabel} guitar | Controls: ${guitarProfileLabel} | Amp: ${ampLabel}<br>${optimized}</p>
+    <p><strong>${recommendation.label}</strong> | ${guitarLabel} guitar | Controls: ${guitarProfileLabel} | Amp: ${ampLabel}<br>${optimized}${orderLabLine}</p>
   `;
 
   if (elements.guitarSettingsOutput && elements.pedalSettingsOutput && elements.ampSettingsOutput) {
@@ -685,8 +748,9 @@ function renderEq10Face(pedal, settings = {}) {
   const bands = settings.bands || {};
   const sliders = EQ10_BANDS.map((band) => {
     const value = typeof bands[band] === "number" ? bands[band] : 0;
-    return `<div class="eq-slider" style="--slider-pos:${sliderPercent(value, -12, 12)}%"></div>`;
+    return `<div class="eq-slider" title="${band} Hz: ${dbValue(value)}" style="--slider-pos:${sliderPercent(value, -12, 12)}%"></div>`;
   }).join("");
+  const labels = EQ10_BANDS.map((band) => `<span>${shortBandLabel(band)}</span>`).join("");
 
   const output = typeof settings.volume === "number" ? settings.volume : 0;
   const gain = typeof settings.gain === "number" ? settings.gain : 0;
@@ -707,6 +771,7 @@ function renderEq10Face(pedal, settings = {}) {
         </div>
       </div>
       <div class="eq-sliders">${sliders}</div>
+      <div class="eq-band-labels eq10-band-labels">${labels}</div>
       <div class="pedal-bottom">31.25Hz - 16kHz</div>
     </div>
   `;
@@ -718,10 +783,11 @@ function renderGe7Face(pedal, settings = {}) {
   const sliders = [
     ...GE7_BANDS.map((band) => {
       const value = typeof bands[band] === "number" ? bands[band] : 0;
-      return `<div class="eq-slider ge7-slider" style="--slider-pos:${sliderPercent(value, -15, 15)}%"></div>`;
+      return `<div class="eq-slider ge7-slider" title="${band} Hz: ${dbValue(value)}" style="--slider-pos:${sliderPercent(value, -15, 15)}%"></div>`;
     }),
-    `<div class="eq-slider ge7-slider ge7-level" style="--slider-pos:${sliderPercent(level, -15, 15)}%"></div>`,
+    `<div class="eq-slider ge7-slider ge7-level" title="Level: ${dbValue(level)}" style="--slider-pos:${sliderPercent(level, -15, 15)}%"></div>`,
   ].join("");
+  const labels = [...GE7_BANDS.map((band) => `<span>${shortBandLabel(band)}</span>`), "<span>Lvl</span>"].join("");
 
   return `
     <div class="pedal-face ge7">
@@ -733,6 +799,7 @@ function renderGe7Face(pedal, settings = {}) {
         <span>Level ${dbValue(level)}</span>
       </div>
       <div class="eq-sliders ge7-track">${sliders}</div>
+      <div class="eq-band-labels ge7-band-labels">${labels}</div>
       <div class="pedal-bottom">100Hz - 6.4kHz</div>
     </div>
   `;
@@ -800,18 +867,22 @@ function buildRecommendation(
   ampModel = "auto",
   guitarProfile = AUTO_GUITAR_PROFILE_BY_TYPE[guitarType] || "electric_2_knob_toggle",
 ) {
+  const normalizedChain = sanitizeChain(chain);
   const preset = deepClone(GENRE_PRESETS[genreKey] || GENRE_PRESETS.metal);
+  const orderAnalysis = runOrderLab(genreKey, normalizedChain.length ? normalizedChain : preset.optimizedChain, guitarType);
+  const presetNotes = filterPresetNotesByChain(preset.notes, normalizedChain);
   const recommendation = {
     label: preset.label,
-    optimizedChain: preset.optimizedChain,
+    optimizedChain: orderAnalysis.bestChain,
+    orderAnalysis,
     pedals: preset.pedals,
     amp: preset.amp,
-    notes: [...preset.notes],
+    notes: [...presetNotes],
     ampModelKey: null,
     ampLabel: "Amp",
   };
 
-  const indexMap = Object.fromEntries(chain.map((pedalId, index) => [pedalId, index]));
+  const indexMap = Object.fromEntries(normalizedChain.map((pedalId, index) => [pedalId, index]));
   const hasPedal = (pedalId) => Number.isInteger(indexMap[pedalId]);
 
   const driveIds = ["sd1", "bd2", "ds1"];
@@ -985,8 +1056,32 @@ function buildRecommendation(
     recommendation.notes.push(ampCountRules.notes.two);
   }
 
-  if (!chain.length) {
+  if (!normalizedChain.length) {
     recommendation.notes.push("Add pedals to the chain to get full per-pedal settings.");
+  }
+
+  recommendation.notes.push(
+    `Order Lab checked ${formatNumber(orderAnalysis.permutationsChecked)} possible layouts for this pedal set.`,
+  );
+
+  if (normalizedChain.length && !sameChain(normalizedChain, orderAnalysis.bestChain)) {
+    recommendation.notes.push(`Best order for your current pedals: ${chainToText(orderAnalysis.bestChain)}`);
+  }
+
+  if (normalizedChain.length) {
+    const chainAnalysis = evaluateChainOrder(
+      normalizedChain,
+      genreKey,
+      guitarType,
+      orderAnalysis.bestChain,
+      true,
+    );
+    if (chainAnalysis.highlights.length) {
+      recommendation.notes.push(...chainAnalysis.highlights);
+    }
+    if (chainAnalysis.eqJustification) {
+      recommendation.notes.push(chainAnalysis.eqJustification);
+    }
   }
 
   applyGuitarTypeProfile(recommendation, guitarType);
@@ -1154,6 +1249,17 @@ function dbValue(value) {
   return `${value} dB`;
 }
 
+function shortBandLabel(label) {
+  const normalized = String(label || "").toLowerCase();
+  if (normalized === "31.25") {
+    return "31";
+  }
+  if (normalized === "62.5") {
+    return "62";
+  }
+  return String(label);
+}
+
 function toClock(percent) {
   const clamped = clamp(percent, 0, 100);
   const startMinutes = 7 * 60;
@@ -1278,6 +1384,11 @@ function quickKnob(value) {
   return `${toClock(safe)} (${safe}%)`;
 }
 
+function formatNumber(value) {
+  const safe = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return safe.toLocaleString("en-US");
+}
+
 function calculateChainScore(chain, optimizedChain) {
   if (!chain.length) {
     return 0;
@@ -1320,6 +1431,330 @@ function sanitizeChain(chain) {
     seen.add(pedalId);
     return true;
   });
+}
+
+function runOrderLab(genreKey, chain, guitarType = "electric") {
+  const stylePreset = GENRE_PRESETS[genreKey] || GENRE_PRESETS.metal;
+  const pedalPool = sanitizeChain(chain);
+  const fallbackPool = sanitizeChain(stylePreset.optimizedChain || []);
+  const workingPool = pedalPool.length ? pedalPool : fallbackPool;
+
+  if (!workingPool.length) {
+    return {
+      bestChain: [],
+      score: 0,
+      permutationsChecked: 0,
+      highlights: [],
+      eqJustification: "",
+    };
+  }
+
+  const cacheKey = `${genreKey}|${guitarType}|${[...workingPool].sort().join(",")}`;
+  const cached = orderLabCache.get(cacheKey);
+  if (cached) {
+    return deepClone(cached);
+  }
+
+  const styleTarget = sanitizeChain(stylePreset.optimizedChain || []);
+  const n = workingPool.length;
+  const used = new Array(n).fill(false);
+  const candidate = new Array(n);
+  let permutationsChecked = 0;
+  let best = {
+    chain: [...workingPool],
+    score: Number.NEGATIVE_INFINITY,
+    mismatch: Number.POSITIVE_INFINITY,
+    lexical: "",
+  };
+
+  function visit(depth) {
+    if (depth === n) {
+      permutationsChecked += 1;
+      const chainCandidate = [...candidate];
+      const evaluation = evaluateChainOrder(chainCandidate, genreKey, guitarType, styleTarget);
+      const mismatch = pairMismatchCount(chainCandidate, styleTarget);
+      const lexical = chainCandidate.join("|");
+      if (
+        evaluation.score > best.score ||
+        (evaluation.score === best.score &&
+          (mismatch < best.mismatch || (mismatch === best.mismatch && lexical < best.lexical)))
+      ) {
+        best = {
+          chain: chainCandidate,
+          score: evaluation.score,
+          mismatch,
+          lexical,
+        };
+      }
+      return;
+    }
+
+    for (let i = 0; i < n; i += 1) {
+      if (used[i]) {
+        continue;
+      }
+      used[i] = true;
+      candidate[depth] = workingPool[i];
+      visit(depth + 1);
+      used[i] = false;
+    }
+  }
+
+  visit(0);
+
+  const bestEvaluation = evaluateChainOrder(best.chain, genreKey, guitarType, styleTarget, true);
+  const result = {
+    bestChain: best.chain,
+    score: best.score,
+    permutationsChecked,
+    highlights: uniqueList(bestEvaluation.highlights || []).slice(0, 5),
+    eqJustification: bestEvaluation.eqJustification || "",
+  };
+  orderLabCache.set(cacheKey, deepClone(result));
+  return result;
+}
+
+function evaluateChainOrder(chain, genreKey, guitarType, styleTarget = [], includeNotes = false) {
+  const indexMap = Object.fromEntries(chain.map((pedalId, index) => [pedalId, index]));
+  const has = (pedalId) => Number.isInteger(indexMap[pedalId]);
+  const notes = [];
+  const driveIds = ["sd1", "bd2", "ds1"].filter(has);
+  const driveIndices = driveIds.map((pedalId) => indexMap[pedalId]).sort((a, b) => a - b);
+  const firstDrive = driveIndices.length ? driveIndices[0] : -1;
+  const lastDrive = driveIndices.length ? driveIndices[driveIndices.length - 1] : -1;
+  let score = 0;
+
+  const modernGenres = new Set(["metal", "rock", "pop", "country", "hip-hop"]);
+  const vintageGenres = new Set(["classic-rock", "blues"]);
+  const targetIndices = Object.fromEntries(styleTarget.map((pedalId, index) => [pedalId, index]));
+
+  const addRule = (condition, weight, passNote) => {
+    if (condition) {
+      score += weight;
+      if (includeNotes && passNote) {
+        notes.push(passNote);
+      }
+      return;
+    }
+    score -= Math.round(weight * 0.72);
+  };
+
+  let pairTotal = 0;
+  let pairCorrect = 0;
+  for (let i = 0; i < chain.length; i += 1) {
+    for (let j = i + 1; j < chain.length; j += 1) {
+      const left = chain[i];
+      const right = chain[j];
+      if (!Number.isInteger(targetIndices[left]) || !Number.isInteger(targetIndices[right])) {
+        continue;
+      }
+      pairTotal += 1;
+      if (targetIndices[left] < targetIndices[right]) {
+        pairCorrect += 1;
+      }
+    }
+  }
+  if (pairTotal) {
+    const pairRatio = pairCorrect / pairTotal;
+    score += Math.round(pairRatio * 34);
+    if (includeNotes) {
+      notes.push(`Style-order alignment scored ${Math.round(pairRatio * 100)}% against ${genreKey} best-practice ordering.`);
+    }
+  }
+
+  if (has("cs3") && driveIndices.length) {
+    addRule(
+      indexMap.cs3 < firstDrive,
+      14,
+      "CS-3 is ahead of gain stages for tighter pick response and cleaner sustain.",
+    );
+  }
+
+  if (has("sd1") && has("ds1")) {
+    const preferSd1First = modernGenres.has(genreKey) || guitarType === "electric";
+    addRule(
+      preferSd1First ? indexMap.sd1 < indexMap.ds1 : indexMap.ds1 < indexMap.sd1,
+      preferSd1First ? 12 : 8,
+      preferSd1First
+        ? "SD-1 is before DS-1 so it acts as a focused boost into distortion."
+        : "DS-1 is before SD-1 to soften clipping and keep a vintage-style response.",
+    );
+  }
+
+  if (driveIndices.length > 1) {
+    const driveSpread = driveIndices[driveIndices.length - 1] - driveIndices[0] + 1;
+    const driveGaps = driveSpread - driveIndices.length;
+    addRule(
+      driveGaps <= 1,
+      8,
+      "Drive pedals are grouped tightly for predictable stacking behavior.",
+    );
+  }
+
+  if (has("ge7") && driveIndices.length) {
+    const wantsPost = modernGenres.has(genreKey) && guitarType === "electric";
+    const placementOk = wantsPost ? indexMap.ge7 > lastDrive : indexMap.ge7 < firstDrive;
+    addRule(
+      placementOk,
+      10,
+      wantsPost
+        ? "GE-7 is post-drive for final contour and mix cut."
+        : "GE-7 is pre-drive for focused mid push into clipping.",
+    );
+  }
+
+  if (has("eq10") && driveIndices.length) {
+    const wantsPost = modernGenres.has(genreKey) && guitarType === "electric";
+    const placementOk = wantsPost ? indexMap.eq10 > lastDrive : indexMap.eq10 < firstDrive;
+    addRule(
+      placementOk,
+      11,
+      wantsPost
+        ? "10-band EQ is post-drive for broad final sculpting."
+        : "10-band EQ is pre-drive for broader pre-clipping tone shaping.",
+    );
+  }
+
+  if (has("ch1") && driveIndices.length) {
+    addRule(
+      indexMap.ch1 > lastDrive,
+      11,
+      "CH-1 is after gain for cleaner modulation and width.",
+    );
+  }
+
+  if (has("dd3") && driveIndices.length) {
+    addRule(
+      indexMap.dd3 > lastDrive,
+      13,
+      "DD-3 is after gain for clearer repeat definition.",
+    );
+  }
+
+  if (has("ch1") && has("dd3")) {
+    addRule(
+      indexMap.ch1 < indexMap.dd3,
+      7,
+      "CH-1 before DD-3 keeps modulation natural before repeats.",
+    );
+  }
+
+  if (has("rc30")) {
+    const rcIndex = indexMap.rc30;
+    const lastIndex = chain.length - 1;
+    addRule(
+      rcIndex === lastIndex,
+      18,
+      "RC-30 is at chain end for stable loop playback while toggling other pedals.",
+    );
+
+    if (has("dd3")) {
+      addRule(
+        indexMap.dd3 < rcIndex,
+        10,
+        "Delay is before RC-30 so repeats are captured into loops naturally.",
+      );
+    }
+    if (has("ch1")) {
+      addRule(
+        indexMap.ch1 < rcIndex,
+        6,
+        "Chorus is before RC-30 for consistent modulated loop capture.",
+      );
+    }
+  }
+
+  let eqJustification = "";
+  if (has("ge7") && has("eq10")) {
+    const eqGap = Math.abs(indexMap.ge7 - indexMap.eq10);
+    const bothPost = driveIndices.length && indexMap.ge7 > lastDrive && indexMap.eq10 > lastDrive;
+    const bothPre = driveIndices.length && indexMap.ge7 < firstDrive && indexMap.eq10 < firstDrive;
+    const unavoidableAdjacency = chain.length <= 2;
+
+    if (eqGap === 1 && !unavoidableAdjacency) {
+      score -= 9;
+    } else if (eqGap > 1) {
+      score += 6;
+    }
+
+    if (bothPost && has("ge7") && has("eq10")) {
+      addRule(
+        indexMap.ge7 < indexMap.eq10,
+        4,
+        "GE-7 sits before 10-band in post-drive stage for surgical-mid first, broad-sculpt second.",
+      );
+    }
+
+    if (bothPre && has("ge7") && has("eq10")) {
+      addRule(
+        indexMap.eq10 < indexMap.ge7,
+        4,
+        "10-band sits before GE-7 pre-drive for broad prep first, focused mid-shaping second.",
+      );
+    }
+
+    if (eqGap === 1) {
+      if (bothPost) {
+        eqJustification =
+          "GE-7 and 10-band are adjacent by design here: GE-7 handles narrow mid surgery, then EQ10 does broad final contour.";
+      } else if (bothPre) {
+        eqJustification =
+          "GE-7 and 10-band are adjacent here for staged pre-drive shaping: broad EQ10 prep followed by focused GE-7 push.";
+      } else {
+        eqJustification =
+          "GE-7 and 10-band ended up adjacent only because separating them cost more overall chain quality in this pedal set.";
+      }
+    } else {
+      eqJustification =
+        "GE-7 and 10-band are intentionally separated to keep each EQ stage distinct and avoid stacked over-filtering.";
+    }
+  }
+
+  if (vintageGenres.has(genreKey) && has("bd2") && has("sd1")) {
+    addRule(
+      indexMap.bd2 < indexMap.sd1,
+      7,
+      "BD-2 before SD-1 keeps the stack touch-sensitive for vintage and blues dynamics.",
+    );
+  }
+
+  return {
+    score,
+    highlights: notes,
+    eqJustification,
+  };
+}
+
+function pairMismatchCount(chain, target) {
+  if (!chain.length || !target.length) {
+    return 0;
+  }
+
+  const indexMap = Object.fromEntries(target.map((pedalId, index) => [pedalId, index]));
+  const common = chain.filter((pedalId) => Number.isInteger(indexMap[pedalId]));
+  let mismatch = 0;
+
+  for (let i = 0; i < common.length; i += 1) {
+    for (let j = i + 1; j < common.length; j += 1) {
+      if (indexMap[common[i]] > indexMap[common[j]]) {
+        mismatch += 1;
+      }
+    }
+  }
+
+  return mismatch;
+}
+
+function sameChain(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function persistState() {
@@ -1382,6 +1817,41 @@ function clampBandMap(map, min, max) {
 
 function uniqueList(list) {
   return [...new Set(list)];
+}
+
+function filterPresetNotesByChain(notes, chain) {
+  const noteList = Array.isArray(notes) ? notes : [];
+  if (!noteList.length) {
+    return [];
+  }
+  const chainSet = new Set(sanitizeChain(Array.isArray(chain) ? chain : []));
+  if (!chainSet.size) {
+    return [];
+  }
+  return noteList.filter((note) => presetNoteApplies(note, chainSet));
+}
+
+function presetNoteApplies(note, chainSet) {
+  const text = String(note || "").toLowerCase().trim();
+  if (!text) {
+    return false;
+  }
+
+  const matchedPedals = Object.entries(PEDAL_NOTE_PATTERNS)
+    .filter(([, patterns]) => patterns.some((pattern) => text.includes(pattern)))
+    .map(([pedalId]) => pedalId);
+
+  if (!matchedPedals.length) {
+    return true;
+  }
+
+  const requiresAll =
+    (text.includes(" and ") || text.includes(" plus ") || text.includes(" into ")) && !text.includes(" or ");
+
+  if (requiresAll) {
+    return matchedPedals.every((pedalId) => chainSet.has(pedalId));
+  }
+  return matchedPedals.some((pedalId) => chainSet.has(pedalId));
 }
 
 function applyGuitarTypeProfile(recommendation, guitarType) {

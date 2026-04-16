@@ -72,6 +72,89 @@ body {
   padding: 1.2rem 1rem 2rem;
 }
 
+#appShell[hidden],
+#accessGate[hidden] {
+  display: none !important;
+}
+
+.access-gate {
+  position: relative;
+  z-index: 1;
+  max-width: 760px;
+  margin: clamp(1rem, 8vh, 5rem) auto 1.5rem;
+  padding: 1rem;
+}
+
+.access-content {
+  padding: 0.4rem;
+}
+
+.access-form {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.access-form label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.remember-wrap {
+  margin-top: 0.15rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.85rem;
+  color: #d6dfcf;
+  user-select: none;
+}
+
+.remember-wrap input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+input {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(14, 22, 26, 0.86);
+  color: var(--text-main);
+  height: 2.4rem;
+  padding: 0 0.8rem;
+  font-family: inherit;
+  font-size: 0.92rem;
+}
+
+  width: 100%;
+}
+
+.access-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.78rem;
+  color: #c7cfbf;
+}
+
+.access-status {
+  margin: 0.6rem 0 0;
+  min-height: 1.05rem;
+  font-size: 0.82rem;
+  color: #d9dfcf;
+}
+
+.access-status.error {
+  color: #ffc6bf;
+}
+
+.access-status.success {
+  color: #c6f5bd;
+}
+
 .hero {
   padding: 0.6rem 0.4rem 1rem;
   animation: rise 420ms ease;
@@ -113,9 +196,9 @@ h2 {
 }
 
 .controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(190px, 1fr)) auto;
+  gap: 0.65rem 0.9rem;
   align-items: center;
   padding: 0.9rem;
 }
@@ -125,6 +208,31 @@ h2 {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.control-pair {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.control-pair label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.control-pair select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.control-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 select,
@@ -164,8 +272,12 @@ select {
   margin-top: 0.95rem;
   display: grid;
   gap: 0.95rem;
-  grid-template-columns: minmax(235px, 285px) minmax(460px, 1fr) minmax(250px, 310px) minmax(275px, 360px);
+  grid-template-columns: minmax(250px, 290px) minmax(520px, 1fr) minmax(290px, 350px);
   align-items: start;
+}
+
+.settings-panel {
+  grid-column: 1 / -1;
 }
 
 .panel > h2 {
@@ -180,6 +292,62 @@ select {
 
 .guitar-visual {
   padding: 0 0.85rem 0.85rem;
+}
+
+.guitar-visual-panel {
+  display: grid;
+  align-content: start;
+}
+
+.amp-stack {
+  margin: 0 0.85rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(8, 13, 17, 0.66);
+  padding: 0.5rem;
+}
+
+.amp-stack-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d4ddc7;
+}
+
+.amp-music-guide {
+  margin-top: 0.52rem;
+}
+
+.amp-music-guide-card {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(6, 10, 13, 0.62);
+  padding: 0.48rem 0.55rem;
+}
+
+.amp-music-guide-card h4 {
+  margin: 0 0 0.36rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #d8e2cb;
+}
+
+.amp-guide-list {
+  margin: 0 0 0.38rem;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.22rem;
+  font-size: 0.74rem;
+  color: #dce4d2;
+}
+
+.amp-music-guide-card p {
+  margin: 0.2rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: #d3dcc8;
 }
 
 .guitar-card {
@@ -317,9 +485,13 @@ select {
 
 .pedal-bank {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.8rem;
   padding: 0 0.85rem 0.85rem;
+}
+
+.pedal-bank .pedal-item {
+  width: 100%;
 }
 
 .center-panel {
@@ -329,7 +501,7 @@ select {
 .chain-dropzone {
   margin: 0 0.85rem;
   border-radius: 14px;
-  min-height: 380px;
+  min-height: 320px;
   padding: 0.8rem;
   border: 1px dashed rgba(255, 255, 255, 0.24);
   background: linear-gradient(180deg, rgba(26, 35, 42, 0.64), rgba(13, 18, 23, 0.5));
@@ -402,19 +574,12 @@ select {
 }
 
 .amp-node-wrap {
-  margin-top: 0.92rem;
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  gap: 0.7rem;
-  align-items: start;
+  margin-top: 0;
+  display: block;
 }
 
 .amp-label {
-  margin-top: 0.55rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #cfd8c5;
+  display: none;
 }
 
 .amp-rig {
@@ -479,6 +644,14 @@ select {
 .amp-control .knob-pointer {
   height: 8px;
   transform-origin: center 9px;
+}
+
+.amp-control .knob-pointer::after,
+.guitar-knob-item .knob-pointer::after,
+.eq-master-control .knob.mini .knob-pointer::after {
+  width: 5px;
+  height: 5px;
+  top: -1px;
 }
 
 .amp-control span {
@@ -604,11 +777,11 @@ select {
 }
 
 .pedal-face {
-  min-height: 196px;
-  padding: 0.4rem 0.42rem 0.36rem;
+  min-height: 208px;
+  padding: 0.48rem 0.48rem 0.4rem;
   display: grid;
   grid-template-rows: auto auto auto 1fr auto auto;
-  gap: 0.26rem;
+  gap: 0.34rem;
   position: relative;
   background: var(--pedal-bg, linear-gradient(180deg, #3a4348, #232c31));
   color: var(--pedal-fg, #f4f6ef);
@@ -617,7 +790,7 @@ select {
 .pedal-face.rc30,
 .pedal-face.eq10,
 .pedal-face.ge7 {
-  min-height: 198px;
+  min-height: 210px;
 }
 
 .pedal-face::before {
@@ -639,7 +812,7 @@ select {
 
 .pedal-model {
   text-align: center;
-  font-size: 0.92rem;
+  font-size: 0.96rem;
   letter-spacing: 0.04em;
   font-weight: 700;
   margin-top: -0.05rem;
@@ -647,7 +820,7 @@ select {
 
 .pedal-desc {
   text-align: center;
-  font-size: 0.56rem;
+  font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   opacity: 0.82;
@@ -655,16 +828,16 @@ select {
 
 .knob-strip {
   display: flex;
-  justify-content: space-evenly;
-  gap: 0.21rem;
-  padding-top: 0.08rem;
+  justify-content: space-between;
+  gap: 0.3rem;
+  padding: 0.14rem 0.06rem 0;
 }
 
 .knob {
-  width: 23px;
-  height: 23px;
+  width: 26px;
+  height: 26px;
   border-radius: 999px;
-  background: radial-gradient(circle at 35% 35%, #ffffff 4px, #171717 5px, #292929 100%);
+  background: radial-gradient(circle at 50% 42%, #464646 0%, #2a2a2a 56%, #161616 100%);
   position: relative;
   border: 1px solid rgba(255, 255, 255, 0.44);
 }
@@ -672,23 +845,44 @@ select {
 .knob-pointer {
   position: absolute;
   width: 2px;
-  height: 10px;
+  height: 11px;
   background: #ff2f2f;
   left: 50%;
   top: 1px;
-  transform-origin: center 11px;
+  transform-origin: center 12px;
   border-radius: 2px;
   transition: transform 180ms ease;
   box-shadow: 0 0 6px rgba(255, 62, 62, 0.68);
 }
 
+.knob-pointer::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: #f6f7f7;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.4);
+}
+
 .knob-labels {
   display: flex;
-  justify-content: space-evenly;
-  gap: 0.2rem;
-  font-size: 0.48rem;
+  justify-content: space-between;
+  gap: 0.25rem;
+  font-size: 0.56rem;
+  line-height: 1.2;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  padding: 0 0.04rem;
+}
+
+.knob-labels span {
+  flex: 1 1 0;
+  text-align: center;
 }
 
 .footswitch {
@@ -768,10 +962,11 @@ select {
 .eq-side-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 0.46rem;
+  font-size: 0.52rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   opacity: 0.86;
+  line-height: 1.2;
 }
 
 .eq-master-row {
@@ -785,26 +980,26 @@ select {
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.26);
   background: rgba(0, 0, 0, 0.22);
-  padding: 0.16rem 0.18rem;
+  padding: 0.2rem 0.2rem;
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 0.24rem;
-  min-height: 22px;
+  gap: 0.3rem;
+  min-height: 28px;
 }
 
 .eq-master-control .knob.mini {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
 .eq-master-control .knob.mini .knob-pointer {
-  height: 7px;
-  transform-origin: center 8px;
+  height: 8px;
+  transform-origin: center 9px;
 }
 
 .eq-master-control span {
-  font-size: 0.46rem;
+  font-size: 0.52rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   opacity: 0.88;
@@ -814,14 +1009,14 @@ select {
 .eq-sliders {
   display: flex;
   justify-content: space-evenly;
-  gap: 2px;
+  gap: 4px;
   align-items: end;
-  height: 64px;
-  margin: 0.1rem 0 0;
+  height: 74px;
+  margin: 0.08rem 0 0;
 }
 
 .eq-slider {
-  width: 8px;
+  width: 11px;
   height: 100%;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.48);
@@ -834,8 +1029,8 @@ select {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  width: 12px;
-  height: 6px;
+  width: 14px;
+  height: 7px;
   border-radius: 3px;
   background: #f7f7f7;
   bottom: calc(var(--slider-pos, 50%) - 3px);
@@ -843,8 +1038,32 @@ select {
   transition: bottom 180ms ease;
 }
 
+.eq-band-labels {
+  display: grid;
+  align-items: center;
+  gap: 3px;
+  margin-top: 0.08rem;
+  font-size: 0.46rem;
+  letter-spacing: 0.03em;
+  line-height: 1.15;
+  text-transform: uppercase;
+  opacity: 0.88;
+}
+
+.eq-band-labels span {
+  text-align: center;
+}
+
+.eq10-band-labels {
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+}
+
+.ge7-band-labels {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
 .ge7-track .ge7-slider {
-  width: 10px;
+  width: 12px;
 }
 
 .ge7-track .ge7-level::after {
@@ -952,6 +1171,7 @@ select {
 
 .settings-output {
   display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.72rem;
   padding: 0.7rem 0.8rem 0.35rem;
 }
@@ -975,6 +1195,10 @@ select {
   margin-top: 0.45rem;
   display: grid;
   gap: 0.55rem;
+  align-content: start;
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 0.18rem;
 }
 
 .empty-setting {
@@ -1020,14 +1244,22 @@ select {
   padding: 0.45rem 0.8rem 0;
   color: var(--text-dim);
   font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.order-lab-meta {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: #dbe7cd;
+  font-size: 0.78rem;
 }
 
 .guidance-list {
-  padding: 0.32rem 0.82rem 0.8rem;
+  padding: 0;
 }
 
 .guidance-list ul {
-  margin: 0.25rem 0 0;
+  margin: 0;
   padding-left: 1rem;
   display: grid;
   gap: 0.35rem;
@@ -1098,11 +1330,21 @@ select {
     grid-template-columns: 1fr;
   }
 
+  .controls {
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+  }
+
+  .control-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
   .chain-dropzone {
     min-height: 340px;
   }
 
   .settings-output {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     max-height: unset;
   }
 
@@ -1122,11 +1364,25 @@ select {
 @media (max-width: 620px) {
   .controls {
     gap: 0.5rem;
+    grid-template-columns: 1fr;
   }
 
   .btn,
   select {
     width: 100%;
+  }
+
+  .control-pair {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-pair label {
+    white-space: normal;
+  }
+
+  .control-actions {
+    grid-column: auto;
   }
 
   .pedal-bank {
@@ -1149,22 +1405,21 @@ select {
   .pedal-face.eq10,
   .pedal-face.rc30,
   .pedal-face.ge7 {
-    min-height: 170px;
+    min-height: 184px;
   }
 
   .knob {
-    width: 19px;
-    height: 19px;
+    width: 22px;
+    height: 22px;
   }
 
   .knob-pointer {
-    height: 8px;
-    transform-origin: center 8px;
+    height: 9px;
+    transform-origin: center 10px;
   }
 
   .amp-node-wrap {
-    grid-template-columns: 1fr;
-    gap: 0.45rem;
+    display: block;
   }
 
   .amp-label,
@@ -1197,6 +1452,10 @@ select {
   }
 
   .guitar-stage {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-output {
     grid-template-columns: 1fr;
   }
 }

@@ -4,14 +4,41 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pedal Architect</title>
-    <link rel="stylesheet" href="styles.css?v=14" />
+    <link rel="stylesheet" href="styles.css?v=20" />
   </head>
   <body>
     <div class="bg-shape shape-one"></div>
     <div class="bg-shape shape-two"></div>
     <div class="bg-noise"></div>
 
-    <main class="app-shell">
+    <section id="accessGate" class="access-gate panel">
+      <div class="access-content">
+        <p class="eyebrow">Device-Locked Access</p>
+        <h1>Pedal Architect Secure Unlock</h1>
+        <p class="hero-copy">
+          Enter your laptop hostname and passkey. Passkeys are generated from hostname + your local
+          master key, so each laptop can have a unique unlock key.
+        </p>
+        <form id="accessForm" class="access-form" autocomplete="off">
+          <label for="hostnameInput">Laptop Hostname</label>
+          <input id="hostnameInput" name="hostname" type="text" spellcheck="false" required />
+          <label for="passkeyInput">Passkey</label>
+          <input id="passkeyInput" name="passkey" type="password" spellcheck="false" required />
+          <label class="remember-wrap" for="rememberPasskey">
+            <input id="rememberPasskey" name="rememberPasskey" type="checkbox" />
+            <span>Remember passkey on this laptop</span>
+          </label>
+          <button id="unlockBtn" class="btn primary" type="submit">Unlock Pedal Architect</button>
+        </form>
+        <p class="access-note">
+          Tip: when opening from a local file, your browser cannot always detect your laptop name.
+          Use the same hostname you used when creating the key.
+        </p>
+        <p id="accessStatus" class="access-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <main id="appShell" class="app-shell" hidden>
       <header class="hero">
         <p class="eyebrow">Offline Tone Designer</p>
         <h1>Pedal Architect</h1>
@@ -22,20 +49,30 @@
       </header>
 
       <section class="controls panel">
-        <label for="genreSelect">Style</label>
-        <select id="genreSelect" aria-label="Select music style"></select>
-        <label for="guitarTypeSelect">Guitar</label>
-        <select id="guitarTypeSelect" aria-label="Select guitar type">
-          <option value="electric">Electric</option>
-          <option value="acoustic">Acoustic</option>
-        </select>
-        <label for="guitarProfileSelect">Guitar Controls</label>
-        <select id="guitarProfileSelect" aria-label="Select guitar control layout"></select>
-        <label for="ampSelect">Amp</label>
-        <select id="ampSelect" aria-label="Select amp model"></select>
-        <button id="optimizeBtn" class="btn primary">Optimize For Me</button>
-        <button id="resetBtn" class="btn">Reset Chain</button>
-        <button id="saveBtn" class="btn">Save Offline</button>
+        <div class="control-pair">
+          <label for="genreSelect">Style</label>
+          <select id="genreSelect" aria-label="Select music style"></select>
+        </div>
+        <div class="control-pair">
+          <label for="guitarTypeSelect">Guitar</label>
+          <select id="guitarTypeSelect" aria-label="Select guitar type">
+            <option value="electric">Electric</option>
+            <option value="acoustic">Acoustic</option>
+          </select>
+        </div>
+        <div class="control-pair">
+          <label for="guitarProfileSelect">Guitar Controls</label>
+          <select id="guitarProfileSelect" aria-label="Select guitar control layout"></select>
+        </div>
+        <div class="control-pair">
+          <label for="ampSelect">Amp</label>
+          <select id="ampSelect" aria-label="Select amp model"></select>
+        </div>
+        <div class="control-actions">
+          <button id="optimizeBtn" class="btn primary">Optimize For Me</button>
+          <button id="resetBtn" class="btn">Reset Chain</button>
+          <button id="saveBtn" class="btn">Save Offline</button>
+        </div>
       </section>
 
       <section class="workspace-grid">
@@ -47,12 +84,10 @@
 
         <section class="panel center-panel">
           <h2>Signal Chain</h2>
-          <p class="panel-caption">Arrange pedals in order, wrapping rows as needed; amp stays fixed at the end.</p>
 
           <div id="chainDropZone" class="chain-dropzone" aria-label="Signal chain builder">
             <div id="chainList" class="chain-list"></div>
             <div id="emptyHint" class="empty-hint">Drop pedals here</div>
-            <div id="ampNode" class="amp-node-wrap"></div>
           </div>
 
           <div class="chain-meta">
@@ -63,8 +98,12 @@
 
         <aside class="panel guitar-visual-panel">
           <h2>Guitar View</h2>
-          <p class="panel-caption">Live instrument view based on selected guitar profile.</p>
           <div id="guitarVisual" class="guitar-visual"></div>
+          <section class="amp-stack">
+            <h3 class="amp-stack-title">Amp (Chain End)</h3>
+            <div id="ampNode" class="amp-node-wrap"></div>
+            <div id="ampMusicGuide" class="amp-music-guide"></div>
+          </section>
         </aside>
 
         <aside class="panel settings-panel">
@@ -72,19 +111,22 @@
           <div id="recommendationMeta" class="recommendation-meta"></div>
           <div id="settingsOutput" class="settings-output">
             <section class="settings-group">
-              <h3 class="settings-group-title">Guitar Settings</h3>
-              <div id="guitarSettingsOutput" class="settings-group-body"></div>
-            </section>
-            <section class="settings-group">
-              <h3 class="settings-group-title">Pedal Settings</h3>
+              <h3 class="settings-group-title">Pedals</h3>
               <div id="pedalSettingsOutput" class="settings-group-body"></div>
             </section>
             <section class="settings-group">
-              <h3 class="settings-group-title">Amp Settings</h3>
+              <h3 class="settings-group-title">Guitar</h3>
+              <div id="guitarSettingsOutput" class="settings-group-body"></div>
+            </section>
+            <section class="settings-group">
+              <h3 class="settings-group-title">Amp</h3>
               <div id="ampSettingsOutput" class="settings-group-body"></div>
             </section>
+            <section class="settings-group">
+              <h3 class="settings-group-title">Justification</h3>
+              <div id="guidanceList" class="settings-group-body guidance-list"></div>
+            </section>
           </div>
-          <div id="guidanceList" class="guidance-list"></div>
         </aside>
       </section>
 
@@ -100,7 +142,8 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="data/config.js?v=3"></script>
-    <script src="app.js?v=12"></script>
+    <script src="data/config.js?v=5"></script>
+    <script src="data/access.js?v=1"></script>
+    <script src="gate.js?v=6"></script>
   </body>
 </html>
