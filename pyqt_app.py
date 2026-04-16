@@ -1378,14 +1378,14 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.setStyleSheet(
             f"""
             QWidget {{ background: #11161a; color: #e9efe4; font-family: 'Trebuchet MS'; font-size: {font_size}px; }}
-            QTabWidget::pane { border: 1px solid #354047; border-radius: 8px; }
-            QTabBar::tab { background: #1d252b; border: 1px solid #364149; border-bottom: none; padding: 8px 14px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-            QTabBar::tab:selected { background: #d6fd73; color: #1a230f; font-weight: 700; }
-            QGroupBox { border: 1px solid #3b4750; border-radius: 8px; margin-top: 8px; font-weight: 700; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #d6e2cb; }
-            QComboBox, QSpinBox, QListWidget, QTextEdit, QPushButton { background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }
-            QPushButton:hover { border: 1px solid #6c7a85; }
-            QLabel { color: #cfd8c9; }
+            QTabWidget::pane {{ border: 1px solid #354047; border-radius: 8px; }}
+            QTabBar::tab {{ background: #1d252b; border: 1px solid #364149; border-bottom: none; padding: 8px 14px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
+            QTabBar::tab:selected {{ background: #d6fd73; color: #1a230f; font-weight: 700; }}
+            QGroupBox {{ border: 1px solid #3b4750; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #d6e2cb; }}
+            QComboBox, QSpinBox, QListWidget, QTextEdit, QPushButton {{ background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }}
+            QPushButton:hover {{ border: 1px solid #6c7a85; }}
+            QLabel {{ color: #cfd8c9; }}
             """
         )
 
