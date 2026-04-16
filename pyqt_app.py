@@ -417,6 +417,13 @@ ORDER_NOTE_PATTERNS = {
 
 STATE_FILE = Path(".pedal_architect_py_state.json")
 PEDAL_MIME_TYPE = "application/x-pedal-architect-pedal-id"
+FONT_PRESET_SPECS = [
+    ("small", "Small", 12),
+    ("medium", "Medium", 14),
+    ("large", "Large", 16),
+    ("xl", "XL", 19),
+]
+FONT_PRESETS = {key: {"label": label, "px": px} for key, label, px in FONT_PRESET_SPECS}
 
 
 class ReorderListWidget(QtWidgets.QListWidget):
@@ -430,9 +437,13 @@ class ReorderListWidget(QtWidgets.QListWidget):
 class PedalBankListWidget(QtWidgets.QListWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._drag_start_pos = QtCore.QPoint()
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDragDropMode(QtWidgets.QAbstractItemView.DragOnly)
+        self.setDragDropOverwriteMode(False)
         self.setDefaultDropAction(QtCore.Qt.CopyAction)
+        self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
     def startDrag(self, _supported_actions):
         item = self.currentItem()
@@ -447,7 +458,24 @@ class PedalBankListWidget(QtWidgets.QListWidget):
         mime.setData(PEDAL_MIME_TYPE, pedal_id.encode("utf-8"))
         mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
         drag.setMimeData(mime)
-        drag.exec_(QtCore.Qt.CopyAction)
+        drag.exec_(QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.CopyAction)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & QtCore.Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < QtWidgets.QApplication.startDragDistance():
+            super().mouseMoveEvent(event)
+            return
+        item = self.itemAt(self._drag_start_pos)
+        if item:
+            self.setCurrentItem(item)
+        self.startDrag(QtCore.Qt.CopyAction)
 
 
 class ChainListWidget(ReorderListWidget):
@@ -458,17 +486,26 @@ class ChainListWidget(ReorderListWidget):
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
+        self.viewport().setAcceptDrops(True)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
+        self.setDragDropOverwriteMode(False)
         self.setDefaultDropAction(QtCore.Qt.MoveAction)
+        self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+
+    def supportedDropActions(self):
+        return QtCore.Qt.CopyAction | QtCore.Qt.MoveAction
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.setDropAction(QtCore.Qt.CopyAction)
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.setDropAction(QtCore.Qt.CopyAction)
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
@@ -481,6 +518,7 @@ class ChainListWidget(ReorderListWidget):
                 if row < 0:
                     row = self.count()
                 self.bankPedalDropped.emit(pedal_id, row)
+            event.setDropAction(QtCore.Qt.CopyAction)
             event.acceptProposedAction()
             return
         super().dropEvent(event)
@@ -488,6 +526,17 @@ class ChainListWidget(ReorderListWidget):
 
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
+
+
+def font_pixels_for_preset(preset_key):
+    if preset_key in FONT_PRESETS:
+        return FONT_PRESETS[preset_key]["px"]
+    return FONT_PRESETS["medium"]["px"]
+
+
+def nearest_font_preset(pixel_size):
+    safe_size = clamp(int(round(pixel_size)), 10, 30)
+    return min(FONT_PRESET_SPECS, key=lambda spec: abs(spec[2] - safe_size))[0]
 
 
 def sanitize_chain(chain):
@@ -815,7 +864,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarType": "electric",
             "guitarProfile": AUTO_GUITAR_PROFILE_BY_TYPE["electric"],
             "ampModel": "auto",
-            "fontSize": 12,
+            "fontPreset": "medium",
             "chain": list(DEFAULT_CHAIN),
         }
 
@@ -846,57 +895,74 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.build_builder_tab()
         self.build_settings_tab()
         self.build_summary_tab()
+        QtCore.QTimer.singleShot(0, self.initialize_splitter_sizes)
+
+    def initialize_splitter_sizes(self):
+        if hasattr(self, "builder_splitter"):
+            self.builder_splitter.setSizes([280, 420, 580])
+        if hasattr(self, "settings_splitter"):
+            self.settings_splitter.setSizes([320, 320, 320, 420])
 
     def build_builder_tab(self):
         layout = QtWidgets.QVBoxLayout(self.builder_tab)
         layout.setSpacing(10)
 
         controls = QtWidgets.QFrame()
-        controls_layout = QtWidgets.QHBoxLayout(controls)
+        controls_layout = QtWidgets.QVBoxLayout(controls)
         controls_layout.setContentsMargins(8, 8, 8, 8)
-        controls_layout.setSpacing(10)
+        controls_layout.setSpacing(8)
+
+        control_grid = QtWidgets.QGridLayout()
+        control_grid.setHorizontalSpacing(10)
+        control_grid.setVerticalSpacing(8)
+        controls_layout.addLayout(control_grid)
 
         self.genre_combo = QtWidgets.QComboBox()
         self.guitar_type_combo = QtWidgets.QComboBox()
         self.guitar_profile_combo = QtWidgets.QComboBox()
         self.amp_combo = QtWidgets.QComboBox()
-        self.font_size_spin = QtWidgets.QSpinBox()
-        self.font_size_spin.setRange(10, 24)
-        self.font_size_spin.setSingleStep(1)
-        self.font_size_spin.setSuffix(" px")
+        self.font_size_combo = QtWidgets.QComboBox()
+        self.font_size_combo.setView(QtWidgets.QListView())
 
-        self.add_labeled_control(controls_layout, "Style", self.genre_combo)
-        self.add_labeled_control(controls_layout, "Guitar", self.guitar_type_combo)
-        self.add_labeled_control(controls_layout, "Guitar Controls", self.guitar_profile_combo)
-        self.add_labeled_control(controls_layout, "Amp", self.amp_combo)
-        self.add_labeled_control(controls_layout, "Font Size", self.font_size_spin)
+        self.add_labeled_control(control_grid, 0, 0, "Style", self.genre_combo)
+        self.add_labeled_control(control_grid, 0, 1, "Guitar", self.guitar_type_combo)
+        self.add_labeled_control(control_grid, 0, 2, "Guitar Controls", self.guitar_profile_combo)
+        self.add_labeled_control(control_grid, 1, 0, "Amp", self.amp_combo)
+        self.add_labeled_control(control_grid, 1, 1, "Font Size", self.font_size_combo)
 
         self.optimize_btn = QtWidgets.QPushButton("Optimize For Me")
         self.reset_btn = QtWidgets.QPushButton("Reset Chain")
         self.save_btn = QtWidgets.QPushButton("Save Offline")
 
-        controls_layout.addWidget(self.optimize_btn)
-        controls_layout.addWidget(self.reset_btn)
-        controls_layout.addWidget(self.save_btn)
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(10)
+        action_row.addStretch(1)
+        action_row.addWidget(self.optimize_btn)
+        action_row.addWidget(self.reset_btn)
+        action_row.addWidget(self.save_btn)
+        controls_layout.addLayout(action_row)
 
         layout.addWidget(controls)
-
-        body = QtWidgets.QHBoxLayout()
-        body.setSpacing(10)
 
         bank_group = QtWidgets.QGroupBox("Pedal Bank")
         bank_layout = QtWidgets.QVBoxLayout(bank_group)
         self.bank_list = PedalBankListWidget()
         self.bank_list.setAlternatingRowColors(True)
+        self.bank_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         bank_layout.addWidget(self.bank_list)
+        bank_hint = QtWidgets.QLabel("Drag pedals from this bank into the Signal Chain panel.")
+        bank_hint.setWordWrap(True)
+        bank_layout.addWidget(bank_hint)
 
         chain_group = QtWidgets.QGroupBox("Signal Chain")
         chain_layout = QtWidgets.QVBoxLayout(chain_group)
         self.chain_list = ChainListWidget()
         self.chain_list.setAlternatingRowColors(True)
+        self.chain_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         chain_layout.addWidget(self.chain_list)
         self.chain_score = QtWidgets.QLabel("Tone Match: --")
         self.chain_summary = QtWidgets.QLabel("")
+        self.chain_summary.setWordWrap(True)
         self.chain_score.setStyleSheet("font-weight: 700;")
         chain_layout.addWidget(self.chain_score)
         chain_layout.addWidget(self.chain_summary)
@@ -909,12 +975,15 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_preview = QtWidgets.QTextEdit()
         self.guitar_preview.setReadOnly(True)
         self.guitar_preview.setPlaceholderText("Guitar controls preview")
+        self.guitar_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.amp_preview = QtWidgets.QTextEdit()
         self.amp_preview.setReadOnly(True)
         self.amp_preview.setPlaceholderText("Amp settings preview")
+        self.amp_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.playbook_preview = QtWidgets.QTextEdit()
         self.playbook_preview.setReadOnly(True)
         self.playbook_preview.setPlaceholderText("Style progression + solo guide")
+        self.playbook_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         right_layout.addWidget(QtWidgets.QLabel("Guitar View"))
         right_layout.addWidget(self.guitar_preview, 1)
         right_layout.addWidget(QtWidgets.QLabel("Amp (Chain End)"))
@@ -922,23 +991,38 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         right_layout.addWidget(QtWidgets.QLabel("Style Playbook"))
         right_layout.addWidget(self.playbook_preview, 2)
 
-        body.addWidget(bank_group, 1)
-        body.addWidget(chain_group, 2)
-        body.addWidget(right_group, 2)
+        for panel in [bank_group, chain_group, right_group]:
+            panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
-        layout.addLayout(body, 1)
+        self.builder_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.builder_splitter.addWidget(bank_group)
+        self.builder_splitter.addWidget(chain_group)
+        self.builder_splitter.addWidget(right_group)
+        self.builder_splitter.setChildrenCollapsible(False)
+        self.builder_splitter.setStretchFactor(0, 2)
+        self.builder_splitter.setStretchFactor(1, 3)
+        self.builder_splitter.setStretchFactor(2, 4)
+        layout.addWidget(self.builder_splitter, 1)
 
         self.populate_controls()
         self.bind_builder_events()
 
     def build_settings_tab(self):
-        layout = QtWidgets.QHBoxLayout(self.settings_tab)
+        layout = QtWidgets.QVBoxLayout(self.settings_tab)
         layout.setSpacing(10)
 
-        self.pedals_settings_text = self.make_settings_column(layout, "Pedals")
-        self.guitar_settings_text = self.make_settings_column(layout, "Guitar")
-        self.amp_settings_text = self.make_settings_column(layout, "Amp")
-        self.justification_text = self.make_settings_column(layout, "Justification")
+        self.settings_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.settings_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.settings_splitter, 1)
+
+        self.pedals_settings_text = self.make_settings_column(self.settings_splitter, "Pedals")
+        self.guitar_settings_text = self.make_settings_column(self.settings_splitter, "Guitar")
+        self.amp_settings_text = self.make_settings_column(self.settings_splitter, "Amp")
+        self.justification_text = self.make_settings_column(self.settings_splitter, "Justification")
+        self.settings_splitter.setStretchFactor(0, 3)
+        self.settings_splitter.setStretchFactor(1, 2)
+        self.settings_splitter.setStretchFactor(2, 2)
+        self.settings_splitter.setStretchFactor(3, 4)
 
     def build_summary_tab(self):
         layout = QtWidgets.QVBoxLayout(self.summary_tab)
@@ -949,21 +1033,29 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         group_layout.addWidget(self.summary_text)
         layout.addWidget(group)
 
-    def add_labeled_control(self, layout, label_text, widget):
-        wrapper = QtWidgets.QHBoxLayout()
+    def add_labeled_control(self, grid_layout, row, col, label_text, widget):
+        wrapper_widget = QtWidgets.QWidget()
+        wrapper = QtWidgets.QHBoxLayout(wrapper_widget)
+        wrapper.setContentsMargins(0, 0, 0, 0)
+        wrapper.setSpacing(6)
         label = QtWidgets.QLabel(label_text)
-        label.setMinimumWidth(96)
+        label.setMinimumWidth(110)
         wrapper.addWidget(label)
         wrapper.addWidget(widget, 1)
-        layout.addLayout(wrapper)
+        grid_layout.addWidget(wrapper_widget, row, col)
 
-    def make_settings_column(self, layout, title):
+    def make_settings_column(self, parent, title):
         group = QtWidgets.QGroupBox(title)
         group_layout = QtWidgets.QVBoxLayout(group)
         text = QtWidgets.QTextEdit()
         text.setReadOnly(True)
+        text.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         group_layout.addWidget(text)
-        layout.addWidget(group, 1)
+        group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        if isinstance(parent, QtWidgets.QSplitter):
+            parent.addWidget(group)
+        else:
+            parent.addWidget(group, 1)
         return text
 
     def bind_builder_events(self):
@@ -971,7 +1063,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_type_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.guitar_profile_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.amp_combo.currentIndexChanged.connect(self.on_controls_changed)
-        self.font_size_spin.valueChanged.connect(self.on_font_size_changed)
+        self.font_size_combo.currentIndexChanged.connect(self.on_font_preset_changed)
 
         self.optimize_btn.clicked.connect(self.optimize_chain)
         self.reset_btn.clicked.connect(self.reset_chain)
@@ -1004,11 +1096,20 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for amp_key, amp in AMP_MODELS.items():
             self.amp_combo.addItem(amp["label"], amp_key)
 
+        self.font_size_combo.clear()
+        for preset_key, label, pixel_size in FONT_PRESET_SPECS:
+            row = self.font_size_combo.count()
+            self.font_size_combo.addItem(f"{label}  AaBbCc ({pixel_size}px)", preset_key)
+            sample_font = QtGui.QFont(self.font_size_combo.font())
+            sample_font.setPointSize(max(8, int(round(pixel_size * 0.72))))
+            self.font_size_combo.setItemData(row, sample_font, QtCore.Qt.FontRole)
+
         self.set_combo_by_data(self.genre_combo, self.state["genre"])
         self.set_combo_by_data(self.guitar_type_combo, self.state["guitarType"])
         self.set_combo_by_data(self.guitar_profile_combo, self.state["guitarProfile"])
         self.set_combo_by_data(self.amp_combo, self.state["ampModel"])
-        self.font_size_spin.setValue(clamp(int(self.state.get("fontSize", 12)), 10, 24))
+        if not self.set_combo_by_data(self.font_size_combo, self.state.get("fontPreset", "medium")):
+            self.set_combo_by_data(self.font_size_combo, "medium")
 
         self._loading_ui = False
 
@@ -1016,7 +1117,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for idx in range(combo.count()):
             if combo.itemData(idx) == value:
                 combo.setCurrentIndex(idx)
-                return
+                return True
+        return False
 
     def on_controls_changed(self):
         if self._loading_ui:
@@ -1040,10 +1142,13 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.render_all()
         self.persist_state(silent=True)
 
-    def on_font_size_changed(self, value):
+    def on_font_preset_changed(self):
         if self._loading_ui:
             return
-        self.state["fontSize"] = clamp(int(value), 10, 24)
+        preset_key = self.font_size_combo.currentData()
+        if preset_key not in FONT_PRESETS:
+            preset_key = "medium"
+        self.state["fontPreset"] = preset_key
         self.apply_theme()
         self.persist_state(silent=True)
 
@@ -1054,6 +1159,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             item_text = PEDAL_LIBRARY[pedal_id]
             item = QtWidgets.QListWidgetItem(item_text)
             item.setData(QtCore.Qt.UserRole, pedal_id)
+            item.setFlags(
+                (item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+                & ~QtCore.Qt.ItemIsDropEnabled
+            )
             if pedal_id in chain_set:
                 item.setForeground(QtGui.QColor("#98A39A"))
                 item.setText(f"{item_text}  [In chain]")
@@ -1065,6 +1174,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for pedal_id in self.state["chain"]:
             item = QtWidgets.QListWidgetItem(PEDAL_LIBRARY[pedal_id])
             item.setData(QtCore.Qt.UserRole, pedal_id)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
             self.chain_list.addItem(item)
         self.chain_list.blockSignals(False)
 
@@ -1352,9 +1462,13 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if amp_model == "auto" or amp_model in AMP_MODELS:
             self.state["ampModel"] = amp_model
 
-        font_size = payload.get("fontSize")
-        if isinstance(font_size, (int, float)):
-            self.state["fontSize"] = clamp(int(font_size), 10, 24)
+        font_preset = payload.get("fontPreset")
+        if font_preset in FONT_PRESETS:
+            self.state["fontPreset"] = font_preset
+        else:
+            font_size = payload.get("fontSize")
+            if isinstance(font_size, (int, float)):
+                self.state["fontPreset"] = nearest_font_preset(font_size)
 
         chain = payload.get("chain")
         if isinstance(chain, list):
@@ -1366,7 +1480,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarType": self.state["guitarType"],
             "guitarProfile": self.state["guitarProfile"],
             "ampModel": self.state["ampModel"],
-            "fontSize": self.state["fontSize"],
+            "fontPreset": self.state["fontPreset"],
+            "fontSize": font_pixels_for_preset(self.state["fontPreset"]),
             "chain": self.state["chain"],
         }
         STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1374,7 +1489,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Saved", "Saved locally on this device.")
 
     def apply_theme(self):
-        font_size = clamp(int(self.state.get("fontSize", 12)), 10, 24)
+        preset_key = self.state.get("fontPreset", "medium")
+        font_size = font_pixels_for_preset(preset_key)
         self.setStyleSheet(
             f"""
             QWidget {{ background: #11161a; color: #e9efe4; font-family: 'Trebuchet MS'; font-size: {font_size}px; }}
@@ -1383,7 +1499,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QTabBar::tab:selected {{ background: #d6fd73; color: #1a230f; font-weight: 700; }}
             QGroupBox {{ border: 1px solid #3b4750; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #d6e2cb; }}
-            QComboBox, QSpinBox, QListWidget, QTextEdit, QPushButton {{ background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }}
+            QComboBox, QListWidget, QTextEdit, QPushButton {{ background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }}
             QPushButton:hover {{ border: 1px solid #6c7a85; }}
             QLabel {{ color: #cfd8c9; }}
             """
