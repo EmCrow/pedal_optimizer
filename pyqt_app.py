@@ -416,6 +416,7 @@ ORDER_NOTE_PATTERNS = {
 }
 
 STATE_FILE = Path(".pedal_architect_py_state.json")
+PEDAL_MIME_TYPE = "application/x-pedal-architect-pedal-id"
 
 
 class ReorderListWidget(QtWidgets.QListWidget):
@@ -424,6 +425,65 @@ class ReorderListWidget(QtWidgets.QListWidget):
     def dropEvent(self, event):
         super().dropEvent(event)
         self.orderChanged.emit()
+
+
+class PedalBankListWidget(QtWidgets.QListWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragOnly)
+        self.setDefaultDropAction(QtCore.Qt.CopyAction)
+
+    def startDrag(self, _supported_actions):
+        item = self.currentItem()
+        if not item:
+            return
+        pedal_id = item.data(QtCore.Qt.UserRole)
+        if not pedal_id:
+            return
+
+        drag = QtGui.QDrag(self)
+        mime = QtCore.QMimeData()
+        mime.setData(PEDAL_MIME_TYPE, pedal_id.encode("utf-8"))
+        mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
+        drag.setMimeData(mime)
+        drag.exec_(QtCore.Qt.CopyAction)
+
+
+class ChainListWidget(ReorderListWidget):
+    bankPedalDropped = QtCore.pyqtSignal(str, int)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(QtCore.Qt.MoveAction)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(PEDAL_MIME_TYPE):
+            pedal_id = bytes(event.mimeData().data(PEDAL_MIME_TYPE)).decode("utf-8").strip()
+            if pedal_id:
+                row = self.indexAt(event.pos()).row()
+                if row < 0:
+                    row = self.count()
+                self.bankPedalDropped.emit(pedal_id, row)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
 
 
 def clamp(value, min_value, max_value):
@@ -755,6 +815,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarType": "electric",
             "guitarProfile": AUTO_GUITAR_PROFILE_BY_TYPE["electric"],
             "ampModel": "auto",
+            "fontSize": 12,
             "chain": list(DEFAULT_CHAIN),
         }
 
@@ -799,11 +860,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_type_combo = QtWidgets.QComboBox()
         self.guitar_profile_combo = QtWidgets.QComboBox()
         self.amp_combo = QtWidgets.QComboBox()
+        self.font_size_spin = QtWidgets.QSpinBox()
+        self.font_size_spin.setRange(10, 24)
+        self.font_size_spin.setSingleStep(1)
+        self.font_size_spin.setSuffix(" px")
 
         self.add_labeled_control(controls_layout, "Style", self.genre_combo)
         self.add_labeled_control(controls_layout, "Guitar", self.guitar_type_combo)
         self.add_labeled_control(controls_layout, "Guitar Controls", self.guitar_profile_combo)
         self.add_labeled_control(controls_layout, "Amp", self.amp_combo)
+        self.add_labeled_control(controls_layout, "Font Size", self.font_size_spin)
 
         self.optimize_btn = QtWidgets.QPushButton("Optimize For Me")
         self.reset_btn = QtWidgets.QPushButton("Reset Chain")
@@ -820,16 +886,14 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
         bank_group = QtWidgets.QGroupBox("Pedal Bank")
         bank_layout = QtWidgets.QVBoxLayout(bank_group)
-        self.bank_list = QtWidgets.QListWidget()
+        self.bank_list = PedalBankListWidget()
         self.bank_list.setAlternatingRowColors(True)
         bank_layout.addWidget(self.bank_list)
 
         chain_group = QtWidgets.QGroupBox("Signal Chain")
         chain_layout = QtWidgets.QVBoxLayout(chain_group)
-        self.chain_list = ReorderListWidget()
+        self.chain_list = ChainListWidget()
         self.chain_list.setAlternatingRowColors(True)
-        self.chain_list.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        self.chain_list.setDefaultDropAction(QtCore.Qt.MoveAction)
         chain_layout.addWidget(self.chain_list)
         self.chain_score = QtWidgets.QLabel("Tone Match: --")
         self.chain_summary = QtWidgets.QLabel("")
@@ -907,6 +971,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_type_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.guitar_profile_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.amp_combo.currentIndexChanged.connect(self.on_controls_changed)
+        self.font_size_spin.valueChanged.connect(self.on_font_size_changed)
 
         self.optimize_btn.clicked.connect(self.optimize_chain)
         self.reset_btn.clicked.connect(self.reset_chain)
@@ -915,6 +980,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.bank_list.itemDoubleClicked.connect(self.add_selected_bank_item)
         self.chain_list.itemDoubleClicked.connect(self.remove_selected_chain_item)
         self.chain_list.orderChanged.connect(self.chain_reordered)
+        self.chain_list.bankPedalDropped.connect(self.insert_pedal_into_chain)
         self.remove_chain_btn.clicked.connect(self.remove_selected_chain_item)
 
     def populate_controls(self):
@@ -942,6 +1008,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.set_combo_by_data(self.guitar_type_combo, self.state["guitarType"])
         self.set_combo_by_data(self.guitar_profile_combo, self.state["guitarProfile"])
         self.set_combo_by_data(self.amp_combo, self.state["ampModel"])
+        self.font_size_spin.setValue(clamp(int(self.state.get("fontSize", 12)), 10, 24))
 
         self._loading_ui = False
 
@@ -971,6 +1038,13 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.state["ampModel"] = self.amp_combo.currentData()
 
         self.render_all()
+        self.persist_state(silent=True)
+
+    def on_font_size_changed(self, value):
+        if self._loading_ui:
+            return
+        self.state["fontSize"] = clamp(int(value), 10, 24)
+        self.apply_theme()
         self.persist_state(silent=True)
 
     def update_bank_list(self):
@@ -1018,6 +1092,22 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if pedal_id in self.state["chain"]:
             return
         self.state["chain"].append(pedal_id)
+        self.render_all()
+        self.persist_state(silent=True)
+
+    def insert_pedal_into_chain(self, pedal_id, row):
+        if pedal_id not in PEDAL_LIBRARY:
+            return
+        chain = list(self.state["chain"])
+        row = clamp(int(row), 0, len(chain))
+        if pedal_id in chain:
+            old_index = chain.index(pedal_id)
+            chain.pop(old_index)
+            if old_index < row:
+                row -= 1
+        row = clamp(int(row), 0, len(chain))
+        chain.insert(row, pedal_id)
+        self.state["chain"] = sanitize_chain(chain)
         self.render_all()
         self.persist_state(silent=True)
 
@@ -1262,6 +1352,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if amp_model == "auto" or amp_model in AMP_MODELS:
             self.state["ampModel"] = amp_model
 
+        font_size = payload.get("fontSize")
+        if isinstance(font_size, (int, float)):
+            self.state["fontSize"] = clamp(int(font_size), 10, 24)
+
         chain = payload.get("chain")
         if isinstance(chain, list):
             self.state["chain"] = sanitize_chain(chain)
@@ -1272,6 +1366,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "guitarType": self.state["guitarType"],
             "guitarProfile": self.state["guitarProfile"],
             "ampModel": self.state["ampModel"],
+            "fontSize": self.state["fontSize"],
             "chain": self.state["chain"],
         }
         STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1279,15 +1374,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Saved", "Saved locally on this device.")
 
     def apply_theme(self):
+        font_size = clamp(int(self.state.get("fontSize", 12)), 10, 24)
         self.setStyleSheet(
-            """
-            QWidget { background: #11161a; color: #e9efe4; font-family: 'Trebuchet MS'; font-size: 12px; }
+            f"""
+            QWidget {{ background: #11161a; color: #e9efe4; font-family: 'Trebuchet MS'; font-size: {font_size}px; }}
             QTabWidget::pane { border: 1px solid #354047; border-radius: 8px; }
             QTabBar::tab { background: #1d252b; border: 1px solid #364149; border-bottom: none; padding: 8px 14px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
             QTabBar::tab:selected { background: #d6fd73; color: #1a230f; font-weight: 700; }
             QGroupBox { border: 1px solid #3b4750; border-radius: 8px; margin-top: 8px; font-weight: 700; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #d6e2cb; }
-            QComboBox, QListWidget, QTextEdit, QPushButton { background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }
+            QComboBox, QSpinBox, QListWidget, QTextEdit, QPushButton { background: #161f25; border: 1px solid #3a464e; border-radius: 6px; padding: 5px; }
             QPushButton:hover { border: 1px solid #6c7a85; }
             QLabel { color: #cfd8c9; }
             """
