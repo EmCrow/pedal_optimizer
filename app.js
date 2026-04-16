@@ -477,10 +477,8 @@ function renderAcousticGuitarVisual(guitar, settings) {
     <section class="guitar-card acoustic-view">
       <h3>${guitar.label}</h3>
       <div class="guitar-stage">
-        <div class="guitar-shape acoustic-shape" aria-hidden="true">
-          <div class="guitar-neck"></div>
-          <div class="guitar-hole"></div>
-          <div class="guitar-bridge"></div>
+        <div class="guitar-svg-wrap" aria-hidden="true">
+          <img class="guitar-photo" src="assets/guitars/taylor_cutout_trim.png" alt="Taylor acoustic guitar" />
         </div>
         <div class="guitar-controls-cluster es2-cluster">
           <p>ES2 Controls</p>
@@ -500,11 +498,8 @@ function renderLesPaulVisual(guitar, settings) {
     <section class="guitar-card les-paul-view">
       <h3>${guitar.label}</h3>
       <div class="guitar-stage">
-        <div class="guitar-shape les-paul-shape" aria-hidden="true">
-          <div class="guitar-neck"></div>
-          <div class="pickup neck-pickup"></div>
-          <div class="pickup bridge-pickup"></div>
-          <div class="selector-switch">${settings.toggle || "Middle"}</div>
+        <div class="guitar-svg-wrap" aria-hidden="true">
+          <img class="guitar-photo" src="assets/guitars/les_paul_cutout_trim.png" alt="Les Paul style electric guitar" />
         </div>
         <div class="guitar-controls-cluster electric-cluster">
           <p>2V / 2T + Toggle</p>
@@ -526,13 +521,8 @@ function renderStratVisual(guitar, settings) {
     <section class="guitar-card strat-view">
       <h3>${guitar.label}</h3>
       <div class="guitar-stage">
-        <div class="guitar-shape strat-shape" aria-hidden="true">
-          <div class="guitar-neck"></div>
-          <div class="pickguard"></div>
-          <div class="pickup pickup-1"></div>
-          <div class="pickup pickup-2"></div>
-          <div class="pickup pickup-3"></div>
-          <div class="selector-switch">${settings.toggle || "Middle"}</div>
+        <div class="guitar-svg-wrap" aria-hidden="true">
+          <img class="guitar-photo" src="assets/guitars/strat_cutout_trim.png" alt="Strat style electric guitar" />
         </div>
         <div class="guitar-controls-cluster electric-cluster">
           <p>Master Controls</p>

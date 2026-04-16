@@ -68,6 +68,12 @@ These sources were used to build the embedded offline settings and routing logic
    - https://www.gibson.com/products/gibson-les-paul-standard-60s-plain-top-ebony
    - https://www.gibson.com/products/epiphone-es-335-dark-walnut
 
+21. Fender Stratocaster pickup selector/control placement reference (5-way blade near lower controls)
+   - https://www.fender.com/articles/instruments/sounds-aplenty-the-stratocaster-pickup-selector-switch
+
+22. Gibson Les Paul control reference (traditional Les Paul wiring: selector + 2 volume + 2 tone)
+   - https://images.gibson.com/Products/Electric-Guitars/2014/Les-Paul-Standard/Les%20Paul%20Standard%20Guide.pdf
+
 ## Note
 
 Genre presets and rule tables in `data/config.js` are practical voicing heuristics inferred from the sources above and common pedalboard practice, then adapted to your exact pedal list.
