@@ -36,6 +36,22 @@ python3 .secrets/device_keygen.py --hostname "<your-laptop-hostname>" --label "<
 3. At unlock prompt, enter the same hostname and generated passkey.
 4. No install step and no internet required after files are local.
 
+## PyQt5 App (py_app branch)
+
+This branch includes a desktop port in `pyqt_app.py` with matching tabs:
+- `Builder`
+- `Rig Settings`
+- `Rig Summary`
+
+Run:
+
+```bash
+python3 -m pip install -r requirements-pyqt.txt
+python3 pyqt_app.py
+```
+
+The PyQt app keeps the same core tone data, genre selector (including Hip Hop), order optimization, and style playbook guidance under the amp section.
+
 ## Device lock (hostname + secret key)
 
 - `index.html` now opens to a secure unlock gate.
