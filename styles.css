@@ -268,8 +268,49 @@ select {
   font-weight: 700;
 }
 
-.workspace-grid {
+.tabs-nav {
+  margin-top: 0.85rem;
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.52rem;
+}
+
+.tab-btn {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 16, 20, 0.74);
+  color: #d9e1d2;
+  height: 2.2rem;
+  padding: 0 0.9rem;
+  font-family: inherit;
+  font-size: 0.88rem;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.tab-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.tab-btn.active {
+  background: linear-gradient(140deg, #d6fd73, #80e570);
+  border-color: transparent;
+  color: #12220e;
+  font-weight: 700;
+}
+
+.tab-pane {
   margin-top: 0.95rem;
+  display: none;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+.workspace-grid {
   display: grid;
   gap: 0.95rem;
   grid-template-columns: minmax(250px, 290px) minmax(520px, 1fr) minmax(290px, 350px);
@@ -1362,6 +1403,16 @@ select {
 }
 
 @media (max-width: 620px) {
+  .tabs-nav {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .tab-btn {
+    flex: 1 1 calc(50% - 0.3rem);
+    min-width: 8.5rem;
+  }
+
   .controls {
     gap: 0.5rem;
     grid-template-columns: 1fr;

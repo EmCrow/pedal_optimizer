@@ -129,7 +129,7 @@
   });
 
   async function loadApp() {
-    await loadScript("app.js?v=16");
+    await loadScript("app.js?v=17");
     gate.hidden = true;
     appShell.hidden = false;
   }

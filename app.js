@@ -27,6 +27,10 @@ const state = {
 };
 
 const elements = {
+  tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
+  tabBuilder: document.getElementById("tabBuilder"),
+  tabSettings: document.getElementById("tabSettings"),
+  tabSummary: document.getElementById("tabSummary"),
   genreSelect: document.getElementById("genreSelect"),
   guitarTypeSelect: document.getElementById("guitarTypeSelect"),
   guitarProfileSelect: document.getElementById("guitarProfileSelect"),
@@ -76,6 +80,7 @@ function init() {
   populateGuitarProfileSelect();
   populateAmpSelect();
   bindEvents();
+  setActiveTab("builder");
   renderAll();
 }
 
@@ -133,6 +138,12 @@ function populateAmpSelect() {
 }
 
 function bindEvents() {
+  elements.tabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      setActiveTab(button.dataset.tabTarget || "builder");
+    });
+  });
+
   elements.genreSelect.addEventListener("change", (event) => {
     state.genre = event.target.value;
     renderAll();
@@ -223,6 +234,30 @@ function bindEvents() {
     renderAll();
     persistState();
     showToast(`${PEDAL_LIBRARY[removed].model} removed from chain.`);
+  });
+}
+
+function setActiveTab(tabKey) {
+  const safeTab = ["builder", "settings", "summary"].includes(tabKey) ? tabKey : "builder";
+  const paneMap = {
+    builder: elements.tabBuilder,
+    settings: elements.tabSettings,
+    summary: elements.tabSummary,
+  };
+
+  elements.tabButtons.forEach((button) => {
+    const isActive = button.dataset.tabTarget === safeTab;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+
+  Object.entries(paneMap).forEach(([key, pane]) => {
+    if (!pane) {
+      return;
+    }
+    const isActive = key === safeTab;
+    pane.classList.toggle("active", isActive);
+    pane.hidden = !isActive;
   });
 }
 

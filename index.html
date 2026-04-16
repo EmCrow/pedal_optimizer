@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pedal Architect</title>
-    <link rel="stylesheet" href="styles.css?v=20" />
+    <link rel="stylesheet" href="styles.css?v=21" />
   </head>
   <body>
     <div class="bg-shape shape-one"></div>
@@ -75,37 +75,77 @@
         </div>
       </section>
 
-      <section class="workspace-grid">
-        <aside class="panel">
-          <h2>Pedal Bank</h2>
-          <p class="panel-caption">Drag each pedal into the center lane.</p>
-          <div id="pedalBank" class="pedal-bank"></div>
-        </aside>
+      <section class="tabs-nav panel" role="tablist" aria-label="Rig workspace tabs">
+        <button
+          id="tabBuilderBtn"
+          class="tab-btn active"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="tabBuilder"
+          data-tab-target="builder"
+        >
+          Builder
+        </button>
+        <button
+          id="tabSettingsBtn"
+          class="tab-btn"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="tabSettings"
+          data-tab-target="settings"
+        >
+          Rig Settings
+        </button>
+        <button
+          id="tabSummaryBtn"
+          class="tab-btn"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="tabSummary"
+          data-tab-target="summary"
+        >
+          Rig Summary
+        </button>
+      </section>
 
-        <section class="panel center-panel">
-          <h2>Signal Chain</h2>
+      <section id="tabBuilder" class="tab-pane active" role="tabpanel">
+        <section class="workspace-grid">
+          <aside class="panel">
+            <h2>Pedal Bank</h2>
+            <p class="panel-caption">Drag each pedal into the center lane.</p>
+            <div id="pedalBank" class="pedal-bank"></div>
+          </aside>
 
-          <div id="chainDropZone" class="chain-dropzone" aria-label="Signal chain builder">
-            <div id="chainList" class="chain-list"></div>
-            <div id="emptyHint" class="empty-hint">Drop pedals here</div>
-          </div>
+          <section class="panel center-panel">
+            <h2>Signal Chain</h2>
 
-          <div class="chain-meta">
-            <span id="chainScore" class="score-pill">Tone Match: --</span>
-            <span id="chainSummary" class="chain-summary"></span>
-          </div>
-        </section>
+            <div id="chainDropZone" class="chain-dropzone" aria-label="Signal chain builder">
+              <div id="chainList" class="chain-list"></div>
+              <div id="emptyHint" class="empty-hint">Drop pedals here</div>
+            </div>
 
-        <aside class="panel guitar-visual-panel">
-          <h2>Guitar View</h2>
-          <div id="guitarVisual" class="guitar-visual"></div>
-          <section class="amp-stack">
-            <h3 class="amp-stack-title">Amp (Chain End)</h3>
-            <div id="ampNode" class="amp-node-wrap"></div>
-            <div id="ampMusicGuide" class="amp-music-guide"></div>
+            <div class="chain-meta">
+              <span id="chainScore" class="score-pill">Tone Match: --</span>
+              <span id="chainSummary" class="chain-summary"></span>
+            </div>
           </section>
-        </aside>
 
+          <aside class="panel guitar-visual-panel">
+            <h2>Guitar View</h2>
+            <div id="guitarVisual" class="guitar-visual"></div>
+            <section class="amp-stack">
+              <h3 class="amp-stack-title">Amp (Chain End)</h3>
+              <div id="ampNode" class="amp-node-wrap"></div>
+              <div id="ampMusicGuide" class="amp-music-guide"></div>
+            </section>
+          </aside>
+        </section>
+      </section>
+
+      <section id="tabSettings" class="tab-pane" role="tabpanel" hidden>
         <aside class="panel settings-panel">
           <h2>Best Settings</h2>
           <div id="recommendationMeta" class="recommendation-meta"></div>
@@ -130,9 +170,11 @@
         </aside>
       </section>
 
-      <section class="panel summary-panel">
-        <h2>Rig Summary</h2>
-        <div id="summaryOutput" class="summary-output"></div>
+      <section id="tabSummary" class="tab-pane" role="tabpanel" hidden>
+        <section class="panel summary-panel">
+          <h2>Rig Summary</h2>
+          <div id="summaryOutput" class="summary-output"></div>
+        </section>
       </section>
 
       <footer class="footer-note">
@@ -144,6 +186,6 @@
 
     <script src="data/config.js?v=5"></script>
     <script src="data/access.js?v=1"></script>
-    <script src="gate.js?v=6"></script>
+    <script src="gate.js?v=7"></script>
   </body>
 </html>
