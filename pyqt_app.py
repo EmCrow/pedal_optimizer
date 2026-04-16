@@ -501,16 +501,21 @@ THEMES = {
     },
 }
 PEDAL_COLORS = {
-    "cs3": "#74c46f",
-    "sd1": "#f7d242",
-    "bd2": "#4ea1ff",
-    "ds1": "#f48d35",
-    "ge7": "#a8a8a8",
-    "eq10": "#d9d1c9",
-    "ch1": "#56c8ef",
-    "dd3": "#5b69e3",
-    "rc30": "#b45261",
+    "cs3": "#67bfe8",
+    "sd1": "#e7cc38",
+    "bd2": "#2f86d0",
+    "ds1": "#ec7f21",
+    "ge7": "#abb2bc",
+    "eq10": "#4289c0",
+    "ch1": "#34a8df",
+    "dd3": "#38c5bc",
+    "rc30": "#c93c39",
 }
+PEDAL_TEXT_COLORS = {
+    "rc30": "#fff7f7",
+}
+GE7_BANDS = ["100", "200", "400", "800", "1.6k", "3.2k", "6.4k"]
+EQ10_BANDS = ["31.25", "62.5", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
 AMP_BRAND_COLORS = {
     "orange_rockerverb_mk3": {"bg": "#f28c28", "fg": "#fff7ea"},
     "marshall_jcm800_2203": {"bg": "#1d1c1a", "fg": "#f2d28b"},
@@ -746,26 +751,106 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         self.update()
 
     def amp_rect(self):
-        width = 170
-        height = 172
-        x = max(16, self.width() - width - 18)
-        y = max(16, self.height() - height - 18)
+        width = 178
+        height = 180
+        x = 18
+        y = max(16, self.height() - height - 16)
         return QtCore.QRect(x, y, width, height)
 
     def guitar_rect(self):
-        amp_rect = self.amp_rect()
-        width = 152
-        height = 222
-        x = max(16, self.width() - width - 24)
-        y = max(14, amp_rect.top() - height - 16)
+        width = 160
+        height = 230
+        x = max(16, self.width() - width - 22)
+        y = max(16, self.height() - height - 16)
         if y < 14:
-            height = max(130, amp_rect.top() - 26)
+            height = max(146, self.height() - 34)
             y = 14
         return QtCore.QRect(x, y, width, height)
 
+    def pedal_lane_bounds(self):
+        left = self.amp_rect().right() + 20
+        right = self.guitar_rect().left() - 20
+        return left, right
+
+    def pedal_position_bounds(self):
+        min_x = 14
+        max_x = max(min_x, self.width() - self.PEDAL_SIZE.width() - 14)
+        min_y = 14
+        max_y = max(min_y, self.height() - self.PEDAL_SIZE.height() - 14)
+        return min_x, max_x, min_y, max_y
+
+    def reserved_pedal_exclusion_rects(self):
+        return [
+            self.amp_rect().adjusted(-10, -10, 10, 10),
+            self.guitar_rect().adjusted(-10, -10, 10, 10),
+        ]
+
+    def can_place_pedal_at(self, point):
+        min_x, max_x, min_y, max_y = self.pedal_position_bounds()
+        if point.x() < min_x or point.x() > max_x or point.y() < min_y or point.y() > max_y:
+            return False
+        rect = QtCore.QRect(point, self.PEDAL_SIZE)
+        for reserved in self.reserved_pedal_exclusion_rects():
+            if rect.intersects(reserved):
+                return False
+        return True
+
+    def find_nearest_open_pedal_position(self, desired):
+        min_x, max_x, min_y, max_y = self.pedal_position_bounds()
+        clamped = QtCore.QPoint(clamp(desired.x(), min_x, max_x), clamp(desired.y(), min_y, max_y))
+        if self.can_place_pedal_at(clamped):
+            return clamped
+
+        candidate_points = []
+        gap = 10
+        for reserved in self.reserved_pedal_exclusion_rects():
+            candidate_points.extend(
+                [
+                    QtCore.QPoint(reserved.left() - self.PEDAL_SIZE.width() - gap, clamped.y()),
+                    QtCore.QPoint(reserved.right() + gap, clamped.y()),
+                    QtCore.QPoint(clamped.x(), reserved.top() - self.PEDAL_SIZE.height() - gap),
+                    QtCore.QPoint(clamped.x(), reserved.bottom() + gap),
+                ]
+            )
+
+        dedupe = set()
+        normalized = []
+        for raw in candidate_points:
+            cand = QtCore.QPoint(clamp(raw.x(), min_x, max_x), clamp(raw.y(), min_y, max_y))
+            key = (cand.x(), cand.y())
+            if key in dedupe:
+                continue
+            dedupe.add(key)
+            normalized.append(cand)
+        normalized.sort(key=lambda pt: abs(pt.x() - clamped.x()) + abs(pt.y() - clamped.y()))
+        for cand in normalized:
+            if self.can_place_pedal_at(cand):
+                return cand
+
+        step = 14
+        max_radius = max(self.width(), self.height())
+        seen = {(clamped.x(), clamped.y())}
+        for radius in range(step, max_radius + step, step):
+            for offset in range(-radius, radius + 1, step):
+                ring_points = [
+                    QtCore.QPoint(clamped.x() + offset, clamped.y() - radius),
+                    QtCore.QPoint(clamped.x() + offset, clamped.y() + radius),
+                    QtCore.QPoint(clamped.x() - radius, clamped.y() + offset),
+                    QtCore.QPoint(clamped.x() + radius, clamped.y() + offset),
+                ]
+                for raw in ring_points:
+                    cand = QtCore.QPoint(clamp(raw.x(), min_x, max_x), clamp(raw.y(), min_y, max_y))
+                    key = (cand.x(), cand.y())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if self.can_place_pedal_at(cand):
+                        return cand
+        return clamped
+
     def amp_input_pos(self):
         rect = self.amp_rect()
-        return QtCore.QPoint(rect.left(), rect.center().y())
+        return QtCore.QPoint(rect.right(), rect.center().y())
 
     def guitar_output_pos(self):
         rect = self.guitar_rect()
@@ -794,12 +879,11 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         return QtCore.QRect(rect.right() - 15, rect.center().y() - 15, 14, 14)
 
     def clamp_pedal_position(self, point):
-        reserved_right = min(self.guitar_rect().left(), self.amp_rect().left()) - 24
-        max_x = reserved_right - self.PEDAL_SIZE.width()
-        if max_x < 14:
-            max_x = 14
-        max_y = max(14, self.height() - self.PEDAL_SIZE.height() - 14)
-        return QtCore.QPoint(clamp(point.x(), 14, max_x), clamp(point.y(), 14, max_y))
+        min_x, max_x, min_y, max_y = self.pedal_position_bounds()
+        desired = QtCore.QPoint(clamp(point.x(), min_x, max_x), clamp(point.y(), min_y, max_y))
+        if self.can_place_pedal_at(desired):
+            return desired
+        return self.find_nearest_open_pedal_position(desired)
 
     def pedal_at(self, point):
         for pedal_id in reversed(self.pedal_ids):
@@ -832,8 +916,12 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         path = QtGui.QPainterPath()
         path.moveTo(start)
         delta = max(32, abs(end.x() - start.x()) // 2)
-        c1 = QtCore.QPoint(start.x() - delta, start.y())
-        c2 = QtCore.QPoint(end.x() + delta, end.y())
+        if start.x() >= end.x():
+            c1 = QtCore.QPoint(start.x() - delta, start.y())
+            c2 = QtCore.QPoint(end.x() + delta, end.y())
+        else:
+            c1 = QtCore.QPoint(start.x() + delta, start.y())
+            c2 = QtCore.QPoint(end.x() - delta, end.y())
         path.cubicTo(c1, c2, end)
         pen = QtGui.QPen(QtGui.QColor(color), width, QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
         pen.setCapStyle(QtCore.Qt.RoundCap)
@@ -841,26 +929,120 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.setBrush(QtCore.Qt.NoBrush)
         painter.drawPath(path)
 
+    def knob_angle(self, value_percent):
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        absolute_minutes = int(round(7 * 60 + (value / 100.0) * (10 * 60))) % (12 * 60)
+        return 90 - (absolute_minutes * 0.5)
+
     def draw_knob(self, painter, center, value_percent):
-        value = clamp(int(round(value_percent)), 0, 100)
-        painter.setPen(QtGui.QPen(QtGui.QColor("#1b2025"), 1))
-        painter.setBrush(QtGui.QBrush(QtGui.QColor("#eceff3")))
-        painter.drawEllipse(center, 7, 7)
-        angle_deg = 225 - (value * 2.7)
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        knob_rect = QtCore.QRectF(center.x() - 8, center.y() - 8, 16, 16)
+        knob_fill = QtGui.QRadialGradient(knob_rect.center(), 8.5)
+        knob_fill.setColorAt(0.0, QtGui.QColor("#f9fbff"))
+        knob_fill.setColorAt(0.55, QtGui.QColor("#e5ebf3"))
+        knob_fill.setColorAt(1.0, QtGui.QColor("#b9c4d2"))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#1a2027"), 1.2))
+        painter.setBrush(QtGui.QBrush(knob_fill))
+        painter.drawEllipse(knob_rect)
+        angle_deg = self.knob_angle(value)
         rad = math.radians(angle_deg)
         tip = QtCore.QPoint(
-            int(round(center.x() + math.cos(rad) * 6.0)),
-            int(round(center.y() - math.sin(rad) * 6.0)),
+            int(round(center.x() + math.cos(rad) * 7.1)),
+            int(round(center.y() - math.sin(rad) * 7.1)),
         )
-        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 2))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 2.4, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
         painter.drawLine(center, tip)
-        marker = QtCore.QPoint(
-            int(round(center.x() + math.cos(rad) * 4.0)),
-            int(round(center.y() - math.sin(rad) * 4.0)),
+        marker = QtCore.QPointF(
+            center.x() + math.cos(rad) * 4.8,
+            center.y() - math.sin(rad) * 4.8,
         )
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
-        painter.drawEllipse(marker, 2, 2)
+        painter.drawEllipse(marker, 1.9, 1.9)
+
+    def draw_slider_lever(self, painter, track_rect, value_percent, handle_color="#f7f9fc"):
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        track_fill = QtGui.QLinearGradient(track_rect.topLeft(), track_rect.bottomLeft())
+        track_fill.setColorAt(0.0, QtGui.QColor(24, 28, 34, 205))
+        track_fill.setColorAt(1.0, QtGui.QColor(9, 12, 15, 210))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#0f151c"), 1))
+        painter.setBrush(QtGui.QBrush(track_fill))
+        painter.drawRoundedRect(track_rect, 2, 2)
+        travel = max(1, track_rect.height() - 6)
+        y = track_rect.bottom() - int(round((value / 100.0) * travel)) - 3
+        handle = QtCore.QRect(track_rect.left() - 2, y, track_rect.width() + 4, 6)
+        handle_fill = QtGui.QLinearGradient(handle.topLeft(), handle.bottomLeft())
+        handle_fill.setColorAt(0.0, QtGui.QColor("#ffffff"))
+        handle_fill.setColorAt(1.0, QtGui.QColor(handle_color))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#1c232c"), 1))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(handle_color)))
+        painter.setBrush(QtGui.QBrush(handle_fill))
+        painter.drawRoundedRect(handle, 2, 2)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 1.4))
+        painter.drawLine(handle.left() + 1, handle.center().y(), handle.right() - 1, handle.center().y())
+
+    def normalized_face_values(self, pedal_id):
+        raw = self.knob_map.get(pedal_id, {})
+        if isinstance(raw, (list, tuple)):
+            return {"knobs": list(raw)}
+        if isinstance(raw, dict):
+            return raw
+        return {}
+
+    def draw_eq_pedal_face(self, painter, rect, pedal_id, face_values):
+        if pedal_id == "ge7":
+            slider_values = list(face_values.get("sliders", [50] * len(GE7_BANDS)))
+            while len(slider_values) < len(GE7_BANDS):
+                slider_values.append(50)
+            slider_values.append(face_values.get("level", 50))
+            track_count = len(slider_values)
+            track_width = 7
+            gap = 2
+            total_width = track_count * track_width + (track_count - 1) * gap
+            if total_width > rect.width() - 8:
+                track_width = max(5, (rect.width() - 8 - (track_count - 1) * gap) // track_count)
+                total_width = track_count * track_width + (track_count - 1) * gap
+            start_x = rect.left() + (rect.width() - total_width) // 2
+            top = rect.top() + 36
+            track_height = 46
+            for idx, value in enumerate(slider_values):
+                x = start_x + idx * (track_width + gap)
+                self.draw_slider_lever(painter, QtCore.QRect(x, top, track_width, track_height), value, "#f6f8fb")
+            painter.setPen(QtGui.QColor("#10141b"))
+            font = painter.font()
+            font.setPointSize(max(5, font.pointSize() - 3))
+            painter.setFont(font)
+            level_label_rect = QtCore.QRect(rect.left() + 4, rect.bottom() - 24, rect.width() - 8, 14)
+            painter.drawText(level_label_rect, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "LVL")
+            return
+
+        if pedal_id == "eq10":
+            slider_values = list(face_values.get("sliders", [50] * len(EQ10_BANDS)))
+            while len(slider_values) < len(EQ10_BANDS):
+                slider_values.append(50)
+            track_count = len(slider_values)
+            track_width = 5
+            gap = 1
+            total_width = track_count * track_width + (track_count - 1) * gap
+            if total_width > rect.width() - 8:
+                track_width = max(4, (rect.width() - 8 - (track_count - 1) * gap) // track_count)
+                total_width = track_count * track_width + (track_count - 1) * gap
+            start_x = rect.left() + (rect.width() - total_width) // 2
+            top = rect.top() + 38
+            track_height = 44
+            for idx, value in enumerate(slider_values):
+                x = start_x + idx * (track_width + gap)
+                self.draw_slider_lever(painter, QtCore.QRect(x, top, track_width, track_height), value, "#f5f8fd")
+            out_rect = QtCore.QRect(rect.left() + 7, rect.top() + 24, 8, 14)
+            gain_rect = QtCore.QRect(rect.right() - 15, rect.top() + 24, 8, 14)
+            self.draw_slider_lever(painter, out_rect, face_values.get("output", 50), "#f4f7fb")
+            self.draw_slider_lever(painter, gain_rect, face_values.get("gain", 50), "#f4f7fb")
+            painter.setPen(QtGui.QColor("#0f1d2a"))
+            font = painter.font()
+            font.setPointSize(max(5, font.pointSize() - 3))
+            painter.setFont(font)
+            painter.drawText(rect.adjusted(2, 22, -2, -2), QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop, "OUT")
+            painter.drawText(rect.adjusted(2, 22, -2, -2), QtCore.Qt.AlignRight | QtCore.Qt.AlignTop, "GAIN")
 
     def guitar_pixmap(self):
         if self.guitar_type == "acoustic":
@@ -875,9 +1057,13 @@ class PedalCanvasWidget(QtWidgets.QWidget):
     def paintEvent(self, _event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QtGui.QPainter.HighQualityAntialiasing)
         painter.fillRect(self.rect(), QtGui.QColor(self.theme["canvas_bg"]))
 
         grid_pen = QtGui.QPen(QtGui.QColor(self.theme["canvas_grid"]), 1)
+        grid_pen.setCosmetic(True)
         painter.setPen(grid_pen)
         step = 24
         for x in range(0, self.width(), step):
@@ -908,18 +1094,36 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         amp_rect = self.amp_rect()
         amp_style = self.amp_brand_style()
         painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
-        painter.setBrush(QtGui.QBrush(QtGui.QColor(amp_style["bg"])))
+        amp_fill = QtGui.QLinearGradient(amp_rect.topLeft(), amp_rect.bottomLeft())
+        amp_fill.setColorAt(0.0, QtGui.QColor(amp_style["bg"]).lighter(118))
+        amp_fill.setColorAt(1.0, QtGui.QColor(amp_style["bg"]).darker(122))
+        painter.setBrush(QtGui.QBrush(amp_fill))
         painter.drawRoundedRect(amp_rect, 13, 13)
+        control_strip = QtCore.QRect(amp_rect.left() + 12, amp_rect.top() + 30, amp_rect.width() - 24, 16)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 80), 1))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(18, 22, 28, 170)))
+        painter.drawRoundedRect(control_strip, 5, 5)
+        for idx in range(6):
+            cx = control_strip.left() + 10 + idx * ((control_strip.width() - 20) // 5)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#11161d"), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor("#d8dde4")))
+            painter.drawEllipse(QtCore.QPoint(cx, control_strip.center().y()), 3, 3)
         painter.setPen(QtGui.QColor(amp_style["fg"]))
         amp_font = painter.font()
         amp_font.setBold(True)
         amp_font.setPointSize(max(8, amp_font.pointSize()))
         painter.setFont(amp_font)
         painter.drawText(amp_rect.adjusted(8, 10, -8, -10), QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, self.amp_label)
-        grill = amp_rect.adjusted(16, 50, -16, -16)
+        grill = amp_rect.adjusted(14, 54, -14, -14)
         painter.setPen(QtGui.QPen(QtGui.QColor("#1f2429"), 2))
-        painter.setBrush(QtGui.QBrush(QtGui.QColor("#2f363e")))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#2d333a")))
         painter.drawRoundedRect(grill, 8, 8)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 24), 1))
+        for x in range(grill.left() + 4, grill.right(), 6):
+            painter.drawLine(x, grill.top() + 2, x, grill.bottom() - 2)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 38), 1))
+        for y in range(grill.top() + 4, grill.bottom(), 6):
+            painter.drawLine(grill.left() + 2, y, grill.right() - 2, y)
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#edf2fb")))
         painter.drawEllipse(self.amp_input_pos(), 7, 7)
@@ -950,18 +1154,29 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             shade = base.darker(122)
             painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
             gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
-            gradient.setColorAt(0.0, base.lighter(118))
+            gradient.setColorAt(0.0, base.lighter(124))
+            gradient.setColorAt(0.58, base)
             gradient.setColorAt(1.0, shade)
             painter.setBrush(QtGui.QBrush(gradient))
             painter.drawRoundedRect(rect, 10, 10)
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 52), 1))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 9, 9)
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 34), 1))
+            painter.drawLine(rect.left() + 10, rect.bottom() - 4, rect.right() - 10, rect.bottom() - 4)
 
-            painter.setPen(QtGui.QColor("#14191f"))
+            painter.setPen(QtGui.QColor(PEDAL_TEXT_COLORS.get(pedal_id, "#11171f")))
             tfont = painter.font()
             tfont.setBold(True)
             tfont.setPointSize(max(6, tfont.pointSize() - 2))
             painter.setFont(tfont)
             title = PEDAL_LIBRARY[pedal_id].replace("BOSS ", "")
             painter.drawText(rect.adjusted(4, 5, -4, -4), QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, title)
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 40), 1))
+            painter.drawLine(rect.left() + 8, rect.top() + 20, rect.right() - 8, rect.top() + 20)
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(60, 66, 74, 140)))
+            painter.drawEllipse(QtCore.QPoint(rect.left() + 11, rect.top() + 11), 1, 1)
+            painter.drawEllipse(QtCore.QPoint(rect.right() - 11, rect.top() + 11), 1, 1)
 
             remove_rect = self.pedal_remove_button_rect(pedal_id)
             painter.setPen(QtGui.QPen(QtGui.QColor("#5d1114"), 1))
@@ -978,17 +1193,28 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 painter.setPen(QtGui.QColor("#0f1722"))
                 painter.drawText(btn_rect, QtCore.Qt.AlignCenter, "~")
 
-            knobs = self.knob_map.get(pedal_id, [50, 50, 50])
-            knob_y = rect.top() + 46
-            spacing = (rect.width() - 20) // 3
-            for idx in range(3):
-                center = QtCore.QPoint(rect.left() + 10 + spacing * idx, knob_y)
-                self.draw_knob(painter, center, knobs[idx] if idx < len(knobs) else 50)
+            face_values = self.normalized_face_values(pedal_id)
+            if pedal_id in {"ge7", "eq10"}:
+                self.draw_eq_pedal_face(painter, rect, pedal_id, face_values)
+            else:
+                knobs = list(face_values.get("knobs", [50, 50, 50]))
+                while len(knobs) < 3:
+                    knobs.append(50)
+                knob_y = rect.top() + 46
+                spacing = (rect.width() - 20) // 3
+                for idx in range(3):
+                    center = QtCore.QPoint(rect.left() + 10 + spacing * idx, knob_y)
+                    self.draw_knob(painter, center, knobs[idx])
 
             switch_rect = QtCore.QRect(rect.left() + 17, rect.bottom() - 34, rect.width() - 34, 20)
             painter.setPen(QtGui.QPen(QtGui.QColor("#1e2329"), 2))
-            painter.setBrush(QtGui.QBrush(QtGui.QColor("#d8dde4")))
+            switch_fill = QtGui.QLinearGradient(switch_rect.topLeft(), switch_rect.bottomLeft())
+            switch_fill.setColorAt(0.0, QtGui.QColor("#f3f6fb"))
+            switch_fill.setColorAt(1.0, QtGui.QColor("#c9d1db"))
+            painter.setBrush(QtGui.QBrush(switch_fill))
             painter.drawRoundedRect(switch_rect, 6, 6)
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 70), 1))
+            painter.drawLine(switch_rect.left() + 3, switch_rect.top() + 3, switch_rect.right() - 3, switch_rect.top() + 3)
 
             painter.setPen(QtCore.Qt.NoPen)
             painter.setBrush(QtGui.QBrush(QtGui.QColor("#f0f5fb")))
@@ -1148,26 +1374,33 @@ def percent_from_db(value, low=-12, high=12):
 def pedal_knob_values(pedal_id, settings):
     safe_settings = settings if isinstance(settings, dict) else {}
     if pedal_id == "cs3":
-        return [safe_settings.get("sustain", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]
+        return {"knobs": [safe_settings.get("sustain", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]}
     if pedal_id == "sd1":
-        return [safe_settings.get("drive", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]
+        return {"knobs": [safe_settings.get("drive", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]}
     if pedal_id == "bd2":
-        return [safe_settings.get("gain", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]
+        return {"knobs": [safe_settings.get("gain", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]}
     if pedal_id == "ds1":
-        return [safe_settings.get("dist", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]
+        return {"knobs": [safe_settings.get("dist", 50), safe_settings.get("tone", 50), safe_settings.get("level", 50)]}
     if pedal_id == "ge7":
         bands = safe_settings.get("bands", {})
-        return [percent_from_db(bands.get("100", 0), -15, 15), percent_from_db(bands.get("800", 0), -15, 15), percent_from_db(bands.get("3.2k", 0), -15, 15)]
+        return {
+            "sliders": [percent_from_db(bands.get(band, 0), -15, 15) for band in GE7_BANDS],
+            "level": percent_from_db(safe_settings.get("level", 0), -15, 15),
+        }
     if pedal_id == "eq10":
         bands = safe_settings.get("bands", {})
-        return [percent_from_db(bands.get("125", 0), -12, 12), percent_from_db(bands.get("1k", 0), -12, 12), percent_from_db(bands.get("8k", 0), -12, 12)]
+        return {
+            "sliders": [percent_from_db(bands.get(band, 0), -12, 12) for band in EQ10_BANDS],
+            "output": percent_from_db(safe_settings.get("volume", 0), -12, 12),
+            "gain": percent_from_db(safe_settings.get("gain", 0), -12, 12),
+        }
     if pedal_id == "ch1":
-        return [safe_settings.get("rate", 50), safe_settings.get("depth", 50), safe_settings.get("effectLevel", 50)]
+        return {"knobs": [safe_settings.get("rate", 50), safe_settings.get("depth", 50), safe_settings.get("effectLevel", 50)]}
     if pedal_id == "dd3":
-        return [safe_settings.get("dTime", 50), safe_settings.get("fBack", 50), safe_settings.get("eLevel", 50)]
+        return {"knobs": [safe_settings.get("dTime", 50), safe_settings.get("fBack", 50), safe_settings.get("eLevel", 50)]}
     if pedal_id == "rc30":
-        return [safe_settings.get("rhythmLevel", 50), safe_settings.get("track1", 50), safe_settings.get("track2", 50)]
-    return [50, 50, 50]
+        return {"knobs": [safe_settings.get("rhythmLevel", 50), safe_settings.get("track1", 50), safe_settings.get("track2", 50)]}
+    return {"knobs": [50, 50, 50]}
 
 
 def unique_list(items):
@@ -1807,12 +2040,17 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             item_text = PEDAL_LIBRARY[pedal_id]
             item = QtWidgets.QListWidgetItem(item_text)
             item.setData(QtCore.Qt.UserRole, pedal_id)
+            base = QtGui.QColor(PEDAL_COLORS.get(pedal_id, "#b0b0b0"))
+            item.setBackground(base.lighter(115))
+            item.setForeground(QtGui.QColor(PEDAL_TEXT_COLORS.get(pedal_id, "#11171f")))
             item.setFlags(
                 (item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
                 & ~QtCore.Qt.ItemIsDropEnabled
             )
             if pedal_id in chain_set:
-                item.setForeground(QtGui.QColor("#98A39A"))
+                muted = QtGui.QColor(PEDAL_TEXT_COLORS.get(pedal_id, "#11171f"))
+                muted.setAlpha(130)
+                item.setForeground(muted)
                 item.setText(f"{item_text}  [In chain]")
             self.bank_list.addItem(item)
 
@@ -1822,6 +2060,9 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for pedal_id in self.state["chain"]:
             item = QtWidgets.QListWidgetItem(PEDAL_LIBRARY[pedal_id])
             item.setData(QtCore.Qt.UserRole, pedal_id)
+            base = QtGui.QColor(PEDAL_COLORS.get(pedal_id, "#b0b0b0"))
+            item.setBackground(base.lighter(115))
+            item.setForeground(QtGui.QColor(PEDAL_TEXT_COLORS.get(pedal_id, "#11171f")))
             item.setFlags(
                 (item.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
                 & ~QtCore.Qt.ItemIsDropEnabled
@@ -1829,19 +2070,122 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.chain_list.addItem(item)
         self.chain_list.blockSignals(False)
 
+    def collect_layout_slots(self, max_count, x_range=None, y_range=None, right_to_left=False):
+        if max_count <= 0:
+            return []
+        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
+        if x_range:
+            min_x = clamp(int(x_range[0]), min_x, max_x)
+            max_x = clamp(int(x_range[1]), min_x, max_x)
+        if y_range:
+            min_y = clamp(int(y_range[0]), min_y, max_y)
+            max_y = clamp(int(y_range[1]), min_y, max_y)
+        if max_x < min_x or max_y < min_y:
+            return []
+
+        step_x = self.board_canvas.PEDAL_SIZE.width() + 22
+        step_y = self.board_canvas.PEDAL_SIZE.height() + 24
+        xs = list(range(min_x, max_x + 1, step_x))
+        ys = list(range(min_y, max_y + 1, step_y))
+        if right_to_left:
+            xs.reverse()
+
+        slots = []
+        seen = set()
+        for y in ys:
+            for x in xs:
+                candidate = QtCore.QPoint(x, y)
+                key = (candidate.x(), candidate.y())
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not self.board_canvas.can_place_pedal_at(candidate):
+                    continue
+                slots.append(candidate)
+                if len(slots) >= max_count:
+                    return slots
+        return slots
+
+    def collect_horizontal_chain_slots(self, max_count, x_range=None, y_range=None):
+        if max_count <= 0:
+            return []
+        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
+        if x_range:
+            min_x = clamp(int(x_range[0]), min_x, max_x)
+            max_x = clamp(int(x_range[1]), min_x, max_x)
+        if y_range:
+            min_y = clamp(int(y_range[0]), min_y, max_y)
+            max_y = clamp(int(y_range[1]), min_y, max_y)
+        if max_x < min_x or max_y < min_y:
+            return []
+
+        step_x = self.board_canvas.PEDAL_SIZE.width() + 22
+        step_y = self.board_canvas.PEDAL_SIZE.height() + 24
+        xs = list(range(max_x, min_x - 1, -step_x))
+        center_y = clamp((min_y + max_y) // 2, min_y, max_y)
+        row_centers = [center_y]
+        for offset in range(step_y, (max_y - min_y) + step_y, step_y):
+            down = center_y + offset
+            up = center_y - offset
+            if down <= max_y:
+                row_centers.append(down)
+            if up >= min_y:
+                row_centers.append(up)
+            if down > max_y and up < min_y:
+                break
+
+        rows = []
+        for y in row_centers:
+            row_slots = []
+            for x in xs:
+                candidate = QtCore.QPoint(x, y)
+                if not self.board_canvas.can_place_pedal_at(candidate):
+                    continue
+                row_slots.append(candidate)
+            if row_slots:
+                rows.append((row_slots, y))
+
+        rows.sort(key=lambda row_entry: (-len(row_entry[0]), abs(row_entry[1] - center_y)))
+
+        slots = []
+        seen = set()
+        for row_slots, _y in rows:
+            for candidate in row_slots:
+                key = (candidate.x(), candidate.y())
+                if key in seen:
+                    continue
+                seen.add(key)
+                slots.append(candidate)
+                if len(slots) >= max_count:
+                    return slots
+        return slots
+
+    def choose_slot(self, candidates, used_rects):
+        for candidate in candidates:
+            candidate_rect = QtCore.QRect(candidate, self.board_canvas.PEDAL_SIZE)
+            collision = False
+            for used in used_rects:
+                if candidate_rect.adjusted(-6, -6, 6, 6).intersects(used):
+                    collision = True
+                    break
+            if not collision:
+                return candidate
+        return None
+
     def default_canvas_position_for(self, pedal_id):
         chain = list(self.state["chain"])
         index = chain.index(pedal_id) if pedal_id in chain else len(chain)
-        right_bound = min(self.board_canvas.guitar_rect().left(), self.board_canvas.amp_rect().left()) - 26
-        left_bound = 22
-        cell_w = self.board_canvas.PEDAL_SIZE.width() + 30
-        usable_width = max(cell_w, right_bound - left_bound)
-        col_count = max(1, usable_width // cell_w)
-        col = index % col_count
-        row = index // col_count
-        x = right_bound - self.board_canvas.PEDAL_SIZE.width() - col * cell_w
-        y = 26 + row * (self.board_canvas.PEDAL_SIZE.height() + 28)
-        return self.board_canvas.clamp_pedal_position(QtCore.QPoint(x, y))
+        needed = max(24, len(chain) + 8, index + 1)
+        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
+        slots = self.collect_horizontal_chain_slots(
+            needed,
+            x_range=(min_x, max_x),
+            y_range=(min_y + 90, max_y),
+        )
+        if index < len(slots):
+            return slots[index]
+        fallback = QtCore.QPoint(20 + (index % 5) * 16, 20 + (index // 5) * 14)
+        return self.board_canvas.clamp_pedal_position(fallback)
 
     def sanitize_canvas_connections(self, active_chain):
         active_set = set(active_chain)
@@ -1959,16 +2303,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             return
         clamped = self.board_canvas.clamp_pedal_position(pos)
         self.state.setdefault("canvasPositions", {})[pedal_id] = [clamped.x(), clamped.y()]
-        self.board_canvas.set_board_data(
-            self.state["chain"],
-            self.state.get("canvasPositions", {}),
-            self.state.get("canvasConnections", []),
-            "AMP",
-            self.state.get("ampModel", ""),
-            self.state.get("guitarType", "electric"),
-            self.state.get("guitarProfile", "electric_2_knob_toggle"),
-            {},
-        )
+        self.board_canvas.update()
         self.persist_state(silent=True)
 
     def introduces_cycle(self, connections):
@@ -2079,20 +2414,67 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         chain = sanitize_chain(self.state["chain"])
         if not chain:
             return
-        right_bound = min(self.board_canvas.guitar_rect().left(), self.board_canvas.amp_rect().left()) - 26
-        left_bound = 22
-        cell_w = self.board_canvas.PEDAL_SIZE.width() + 30
-        cell_h = self.board_canvas.PEDAL_SIZE.height() + 28
-        usable_width = max(cell_w, right_bound - left_bound)
-        cols = max(1, usable_width // cell_w)
+        connected = self.compute_connected_chain()
+        connected_ids = [pedal_id for pedal_id in chain if pedal_id in connected]
+        staged_ids = [pedal_id for pedal_id in chain if pedal_id not in connected]
+
+        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
+        signal_slots = self.collect_horizontal_chain_slots(
+            max(len(connected_ids) * 3, 16),
+            x_range=(min_x, max_x),
+            y_range=(min_y + 90, max_y),
+        )
+        if len(signal_slots) < len(connected_ids):
+            signal_slots = self.collect_horizontal_chain_slots(
+                max(len(chain) * 3, 18),
+                x_range=(min_x, max_x),
+                y_range=(min_y, max_y),
+            )
+        if len(signal_slots) < len(connected_ids):
+            signal_slots.extend(
+                self.collect_layout_slots(
+                    max(len(chain) * 3, 18),
+                    x_range=(min_x, max_x),
+                    y_range=(min_y, max_y),
+                    right_to_left=True,
+                )
+            )
+
+        parking_y1 = min(max_y, min_y + self.board_canvas.PEDAL_SIZE.height() + 40)
+        parking_slots = self.collect_layout_slots(
+            max(len(staged_ids) * 4, 12),
+            y_range=(min_y, parking_y1),
+            right_to_left=False,
+        )
+        if len(parking_slots) < len(staged_ids):
+            right_column_x0 = max(min_x, max_x - self.board_canvas.PEDAL_SIZE.width() - 6)
+            parking_slots.extend(
+                self.collect_layout_slots(
+                    max(len(staged_ids) * 4, 12),
+                    x_range=(right_column_x0, max_x),
+                    y_range=(min_y, max_y),
+                    right_to_left=False,
+                )
+            )
+
+        fallback_slots = self.collect_layout_slots(max(len(chain) * 4, 24), right_to_left=True)
         positions = self.state.setdefault("canvasPositions", {})
-        for idx, pedal_id in enumerate(chain):
-            col = idx % cols
-            row = idx // cols
-            x = right_bound - self.board_canvas.PEDAL_SIZE.width() - col * cell_w
-            y = 26 + row * cell_h
-            clamped = self.board_canvas.clamp_pedal_position(QtCore.QPoint(x, y))
-            positions[pedal_id] = [clamped.x(), clamped.y()]
+        used_rects = []
+
+        for pedal_id in connected_ids:
+            slot = self.choose_slot(signal_slots, used_rects)
+            if slot is None:
+                slot = self.choose_slot(fallback_slots, used_rects) or self.board_canvas.clamp_pedal_position(QtCore.QPoint(min_x, min_y))
+            positions[pedal_id] = [slot.x(), slot.y()]
+            used_rects.append(QtCore.QRect(slot, self.board_canvas.PEDAL_SIZE))
+
+        for pedal_id in staged_ids:
+            slot = self.choose_slot(parking_slots, used_rects)
+            if slot is None:
+                slot = self.choose_slot(fallback_slots, used_rects) or self.board_canvas.clamp_pedal_position(QtCore.QPoint(max_x, min_y))
+            positions[pedal_id] = [slot.x(), slot.y()]
+            used_rects.append(QtCore.QRect(slot, self.board_canvas.PEDAL_SIZE))
+
         self.render_all()
         self.persist_state(silent=True)
 
