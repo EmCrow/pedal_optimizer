@@ -1895,7 +1895,7 @@ pre {
 .board-cable-layer {
   position: absolute;
   inset: 0;
-  pointer-events: none;
+  pointer-events: auto;
   z-index: 3;
 }
 
@@ -1905,6 +1905,11 @@ pre {
   stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.cable-line.selected {
+  stroke: color-mix(in srgb, var(--tab-active-bg) 80%, #ffffff 20%);
+  stroke-width: 4;
 }
 
 .cable-line.preview {
@@ -1924,6 +1929,36 @@ pre {
   position: absolute;
   width: 96px;
   z-index: 4;
+}
+
+.board-pedal.selected .pedal-frame,
+.board-guitar.selected,
+.board-amp.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tab-active-bg) 78%, #ffffff 22%),
+    0 0 0 6px rgba(0, 0, 0, 0.12);
+}
+
+.node-status {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  z-index: 6;
+  font-size: 0.45rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 0.1rem 0.26rem;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  background: rgba(255, 255, 255, 0.88);
+  color: #13202f;
+}
+
+.node-status.ok {
+  background: color-mix(in srgb, var(--positive) 68%, #ffffff 32%);
+}
+
+.node-status.warn {
+  background: #ffd08a;
 }
 
 .board-pedal .pedal-frame {
@@ -2065,6 +2100,16 @@ pre {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
   cursor: crosshair;
   z-index: 6;
+}
+
+.jack.link-valid {
+  background: color-mix(in srgb, var(--positive) 72%, #ffffff 28%);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.18);
+}
+
+.jack.link-invalid {
+  background: #f38f97;
+  opacity: 0.65;
 }
 
 .board-pedal .jack.output {
@@ -2337,9 +2382,18 @@ pre {
   stroke-width: 1;
 }
 
+.fifths-node {
+  cursor: pointer;
+}
+
 .fifths-node.active circle {
   fill: color-mix(in srgb, var(--positive) 42%, transparent);
   stroke: color-mix(in srgb, var(--positive) 82%, #ffffff 18%);
+}
+
+.fifths-node.selected circle {
+  stroke: color-mix(in srgb, var(--tab-active-bg) 85%, #ffffff 15%);
+  stroke-width: 2;
 }
 
 .fifths-node text {

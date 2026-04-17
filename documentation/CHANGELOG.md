@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-04-17 (dealers_choice canvas rebuild + fallback)
+- Pushed fallback checkpoint commit: `82dce38` with message `fallback snapshot prior to rebuild`.
+- Rebuilt Builder toward canvas-first interaction:
+  - drag from pedal bank to canvas to place pedals
+  - move pedals directly on canvas
+  - connect output (left) to input (right)
+  - enforce guitar as signal start and amp as signal end anchors
+- Removed Builder Inspector and Signal Runs panels after UX review (kept board-focused workflow).
+- Updated cache-busted asset/script versions in `index.html` + `gate.js`.
+- **Known bug (tracked):** Builder Tab and Rig Setup Tab can drift briefly out of sync after rapid canvas edits (drop/move/reconnect in quick succession), causing temporary stale rig detail cards until the next render cycle.
+
 ## 2026-04-16 (dealers_choice web-first implementation)
 - Implemented the deployment decision by migrating this branch to the plain HTML/CSS/JavaScript app stack.
 - Imported canonical web runtime files from `web_app` branch:

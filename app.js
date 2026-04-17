@@ -809,6 +809,9 @@ const runtime = {
   crazyPayloadCache: new Map(),
   boardInitialized: false,
   lastBoardSize: { width: 980, height: 560 },
+  selectedNodeId: "",
+  selectedEdgeIndex: -1,
+  connectionHistory: [],
   draggingPedalId: null,
   draggingOffset: { x: 0, y: 0 },
   linkStart: null,
@@ -1343,10 +1346,18 @@ function returnChainPedalToBank(pedalId) {
   if (!state.chain.includes(pedalId)) {
     return;
   }
+  const hadConnections = state.canvasConnections.some((edge) => edge[0] === pedalId || edge[1] === pedalId);
+  if (hadConnections) {
+    snapshotConnections();
+  }
   state.chain = state.chain.filter((id) => id !== pedalId);
   state.canvasConnections = state.canvasConnections.filter(
     (edge) => edge[0] !== pedalId && edge[1] !== pedalId,
   );
+  if (runtime.selectedNodeId === pedalId) {
+    runtime.selectedNodeId = "";
+  }
+  runtime.selectedEdgeIndex = -1;
   delete state.canvasPositions[pedalId];
   ensureCanvasState();
   renderAll();
@@ -1374,8 +1385,25 @@ function bindBoardEvents() {
       state.chain = [...state.chain.filter((id) => id !== payload.pedalId), payload.pedalId];
     }
     ensureCanvasState(payload.pedalId, boardPoint);
+    if (!state.canvasConnections.length) {
+      state.canvasConnections = anchorConnectionsToEndpoints(state.canvasConnections);
+    }
+    runtime.selectedNodeId = payload.pedalId;
+    runtime.selectedEdgeIndex = -1;
     renderAll();
     persistState();
+  });
+
+  elements.boardCableLayer.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("polyline[data-edge-index]") : null;
+    if (!target) {
+      runtime.selectedEdgeIndex = -1;
+      renderBoard(runtime.lastRecommendation);
+      return;
+    }
+    runtime.selectedNodeId = "";
+    runtime.selectedEdgeIndex = Number(target.dataset.edgeIndex);
+    renderBoard(runtime.lastRecommendation);
   });
 
   elements.boardNodes.addEventListener("click", (event) => {
@@ -1388,13 +1416,37 @@ function bindBoardEvents() {
     if (disconnect) {
       const pedalId = disconnect.dataset.pedalId;
       const side = disconnect.dataset.disconnect;
+      snapshotConnections();
       if (side === "input") {
         state.canvasConnections = state.canvasConnections.filter((edge) => edge[1] !== pedalId);
       } else {
         state.canvasConnections = state.canvasConnections.filter((edge) => edge[0] !== pedalId);
       }
+      runtime.selectedEdgeIndex = -1;
       renderAll();
       persistState();
+      showToast("Disconnected cable side.");
+      return;
+    }
+
+    const selectedNode = event.target.closest(".board-pedal[data-pedal-id], .board-guitar[data-node-id], .board-amp[data-node-id]");
+    if (selectedNode) {
+      runtime.selectedEdgeIndex = -1;
+      runtime.selectedNodeId = selectedNode.dataset.pedalId || selectedNode.dataset.nodeId || "";
+      renderBoard(runtime.lastRecommendation);
+      return;
+    }
+
+    runtime.selectedNodeId = "";
+    runtime.selectedEdgeIndex = -1;
+    renderBoard(runtime.lastRecommendation);
+  });
+
+  elements.boardCanvas.addEventListener("click", (event) => {
+    if (event.target === elements.boardCanvas || event.target === elements.boardNodes) {
+      runtime.selectedNodeId = "";
+      runtime.selectedEdgeIndex = -1;
+      renderBoard(runtime.lastRecommendation);
     }
   });
 
@@ -1403,6 +1455,8 @@ function bindBoardEvents() {
     if (outputJack) {
       const nodeId = outputJack.dataset.nodeId;
       if (nodeId) {
+        runtime.selectedNodeId = nodeId;
+        runtime.selectedEdgeIndex = -1;
         runtime.linkStart = nodeId;
         runtime.linkPreview = toBoardPoint(event.clientX, event.clientY);
         renderBoardCables();
@@ -1428,6 +1482,8 @@ function bindBoardEvents() {
     if (!pedalId || !state.canvasPositions[pedalId]) {
       return;
     }
+    runtime.selectedNodeId = pedalId;
+    runtime.selectedEdgeIndex = -1;
 
     const boardPoint = toBoardPoint(event.clientX, event.clientY);
     if (!boardPoint) {
@@ -1484,6 +1540,30 @@ function bindBoardEvents() {
     if (runtime.draggingPedalId) {
       runtime.draggingPedalId = null;
       persistState();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (
+      target &&
+      (target.closest("input, textarea, select") ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
+
+    if (event.key === "Delete" || event.key === "Backspace") {
+      if (deleteSelectedConnection()) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    const undoChord = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z";
+    if (undoChord) {
+      undoConnectionMutation();
+      event.preventDefault();
     }
   });
 }
@@ -1966,7 +2046,11 @@ function cleanUpLayout() {
 }
 
 function clearCables() {
+  if (state.canvasConnections.length) {
+    snapshotConnections();
+  }
   state.canvasConnections = [];
+  runtime.selectedEdgeIndex = -1;
 }
 
 function autoWireActivePedals() {
@@ -2051,6 +2135,47 @@ function computeConnectedChain() {
   return [];
 }
 
+function computeReachableChainFromGuitar() {
+  const activeSet = new Set(state.chain);
+  const outgoing = {};
+  (state.canvasConnections || []).forEach((edge) => {
+    if (!Array.isArray(edge) || edge.length !== 2) {
+      return;
+    }
+    const src = String(edge[0]);
+    const dst = String(edge[1]);
+    if (src !== GUITAR_NODE_ID && !activeSet.has(src)) {
+      return;
+    }
+    if (dst !== AMP_NODE_ID && !activeSet.has(dst)) {
+      return;
+    }
+    outgoing[src] = dst;
+  });
+
+  if (!outgoing[GUITAR_NODE_ID]) {
+    return [];
+  }
+
+  const chain = [];
+  const seen = new Set([GUITAR_NODE_ID]);
+  let cursor = outgoing[GUITAR_NODE_ID];
+
+  while (cursor && !seen.has(cursor)) {
+    if (cursor === AMP_NODE_ID) {
+      break;
+    }
+    if (!activeSet.has(cursor)) {
+      break;
+    }
+    chain.push(cursor);
+    seen.add(cursor);
+    cursor = outgoing[cursor];
+  }
+
+  return sanitizeChain(chain);
+}
+
 function introducesCycle(connections) {
   const outgoing = {};
   connections.forEach(([src, dst]) => {
@@ -2074,21 +2199,21 @@ function introducesCycle(connections) {
   return false;
 }
 
-function onCanvasConnectionCreated(src, dst) {
+function nextConnectionsForLink(src, dst) {
   if (!src || !dst || src === dst || dst === GUITAR_NODE_ID) {
-    return;
+    return null;
   }
   const activeSet = new Set(state.chain);
   if (src !== GUITAR_NODE_ID && !activeSet.has(src)) {
-    return;
+    return null;
   }
   if (dst !== AMP_NODE_ID && !activeSet.has(dst)) {
-    return;
+    return null;
   }
 
-  let candidate = (state.canvasConnections || []).filter(
-    (edge) => Array.isArray(edge) && edge.length === 2,
-  ).map((edge) => [String(edge[0]), String(edge[1])]);
+  let candidate = (state.canvasConnections || [])
+    .filter((edge) => Array.isArray(edge) && edge.length === 2)
+    .map((edge) => [String(edge[0]), String(edge[1])]);
 
   candidate = candidate.filter(([s]) => s !== src);
   if (dst !== AMP_NODE_ID) {
@@ -2099,11 +2224,78 @@ function onCanvasConnectionCreated(src, dst) {
   candidate.push([src, dst]);
 
   if (introducesCycle(candidate)) {
+    return null;
+  }
+  return candidate;
+}
+
+function anchorConnectionsToEndpoints(connections) {
+  const activeChain = sanitizeChain(state.chain);
+  if (!activeChain.length) {
+    return [];
+  }
+
+  const activeSet = new Set(activeChain);
+  let clean = (connections || [])
+    .filter((edge) => Array.isArray(edge) && edge.length === 2)
+    .map((edge) => [String(edge[0]), String(edge[1])])
+    .filter(([src, dst]) => (src === GUITAR_NODE_ID || activeSet.has(src)) && (dst === AMP_NODE_ID || activeSet.has(dst)));
+
+  const incoming = {};
+  const outgoing = {};
+  clean.forEach(([src, dst]) => {
+    outgoing[src] = dst;
+    incoming[dst] = src;
+  });
+
+  let start = outgoing[GUITAR_NODE_ID];
+  if (!start || !activeSet.has(start)) {
+    const heads = activeChain.filter((pedalId) => !incoming[pedalId]);
+    start = heads[0] || activeChain[0];
+  }
+
+  clean = clean.filter(([src, dst]) => src !== GUITAR_NODE_ID && dst !== start);
+  clean.push([GUITAR_NODE_ID, start]);
+
+  const outgoingAfter = {};
+  clean.forEach(([src, dst]) => {
+    outgoingAfter[src] = dst;
+  });
+
+  const seen = new Set([GUITAR_NODE_ID]);
+  let cursor = start;
+  let tail = start;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    tail = cursor;
+    const next = outgoingAfter[cursor];
+    if (!next || next === AMP_NODE_ID || !activeSet.has(next)) {
+      break;
+    }
+    cursor = next;
+  }
+
+  clean = clean.filter(([src, dst]) => dst !== AMP_NODE_ID && src !== tail);
+  clean.push([tail, AMP_NODE_ID]);
+
+  if (introducesCycle(clean)) {
+    return connections || [];
+  }
+  return clean;
+}
+
+function onCanvasConnectionCreated(src, dst) {
+  let candidate = nextConnectionsForLink(src, dst);
+  if (!candidate) {
     showToast("Cable loop blocked. Try a different target.");
     return;
   }
+  candidate = anchorConnectionsToEndpoints(candidate);
 
+  snapshotConnections();
   state.canvasConnections = candidate;
+  runtime.selectedEdgeIndex = -1;
+  runtime.selectedNodeId = "";
   renderAll();
 }
 
@@ -2157,10 +2349,11 @@ function renderAll() {
   state.chain = sanitizeChain(state.chain);
   ensureCanvasState();
   state.connectedChain = computeConnectedChain();
+  const effectiveSignalChain = state.connectedChain.length ? state.connectedChain : state.chain;
 
   const recommendation = buildRecommendation(
     state.genre,
-    state.connectedChain,
+    effectiveSignalChain,
     state.guitarType,
     state.ampModel,
     state.guitarProfile,
@@ -2176,7 +2369,7 @@ function renderAll() {
   renderTheoryTab(recommendation);
   renderFeedbackTab();
 
-  const match = calculateChainScore(state.connectedChain, recommendation.optimizedChain);
+  const match = calculateChainScore(effectiveSignalChain, recommendation.optimizedChain);
   elements.chainScore.textContent = `Tone Match: ${match}%`;
   const connectedText = state.connectedChain.length
     ? state.connectedChain.map((id) => PEDAL_LIBRARY[id].model).join(" -> ")
@@ -2289,6 +2482,13 @@ function renderBoard(recommendation) {
 
   const amp = ampRect();
   const guitar = guitarRect();
+  const linkSource = runtime.linkStart || "";
+  const inputClassFor = (targetId) => {
+    if (!linkSource) {
+      return "";
+    }
+    return nextConnectionsForLink(linkSource, targetId) ? " link-valid" : " link-invalid";
+  };
 
   const guitarProfile = recommendation?.guitar?.profileKey || state.guitarProfile;
   const guitarImage =
@@ -2298,16 +2498,21 @@ function renderBoard(recommendation) {
         ? "assets/guitars/les_paul_cutout_trim.png"
         : "assets/guitars/strat_cutout_trim.png";
 
+  const reachable = computeReachableChainFromGuitar();
   const pedalNodes = state.chain
     .map((pedalId) => {
       const pos = state.canvasPositions[pedalId] || [16, 16];
+      const selected = runtime.selectedNodeId === pedalId;
+      const connected = state.connectedChain.includes(pedalId);
+      const statusLabel = connected ? "Connected" : (reachable.includes(pedalId) ? "Path Break" : "Unwired");
       return `
-        <article class="board-pedal pedal-item" data-pedal-id="${pedalId}" style="left:${pos[0]}px;top:${pos[1]}px;">
+        <article class="board-pedal pedal-item ${selected ? "selected" : ""}" data-pedal-id="${pedalId}" style="left:${pos[0]}px;top:${pos[1]}px;">
           <button class="pedal-remove" type="button" data-remove-pedal="${pedalId}" title="Remove pedal">x</button>
           <button class="pedal-disconnect pedal-disconnect-out" type="button" data-pedal-id="${pedalId}" data-disconnect="output" title="Disconnect output">~</button>
           <button class="pedal-disconnect pedal-disconnect-in" type="button" data-pedal-id="${pedalId}" data-disconnect="input" title="Disconnect input">~</button>
+          <span class="node-status ${connected ? "ok" : "warn"}">${statusLabel}</span>
           <div class="jack output" data-node-id="${pedalId}" title="Output"></div>
-          <div class="jack input" data-node-id="${pedalId}" title="Input"></div>
+          <div class="jack input${inputClassFor(pedalId)}" data-node-id="${pedalId}" title="Input"></div>
           <div class="pedal-frame">
             ${renderPedalFace(pedalId, PEDAL_LIBRARY[pedalId], recommendation?.pedals?.[pedalId] || {})}
           </div>
@@ -2321,13 +2526,13 @@ function renderBoard(recommendation) {
   const ampLabel = recommendation?.ampLabel || ampSettings.modelLabel || "AMP";
 
   elements.boardNodes.innerHTML = `
-    <article class="board-guitar" style="left:${guitar.x}px;top:${guitar.y}px;width:${guitar.width}px;height:${guitar.height}px;">
+    <article class="board-guitar ${runtime.selectedNodeId === GUITAR_NODE_ID ? "selected" : ""}" data-node-id="${GUITAR_NODE_ID}" style="left:${guitar.x}px;top:${guitar.y}px;width:${guitar.width}px;height:${guitar.height}px;">
       <h4>Guitar</h4>
       <img src="${guitarImage}" alt="Guitar" class="guitar-photo" />
       <div class="jack output" data-node-id="${GUITAR_NODE_ID}" title="Guitar Output"></div>
     </article>
 
-    <article class="board-amp amp-rig amp-brand-${ampBrand}" style="left:${amp.x}px;top:${amp.y}px;width:${amp.width}px;height:${amp.height}px;">
+    <article class="board-amp amp-rig amp-brand-${ampBrand} ${runtime.selectedNodeId === AMP_NODE_ID ? "selected" : ""}" data-node-id="${AMP_NODE_ID}" style="left:${amp.x}px;top:${amp.y}px;width:${amp.width}px;height:${amp.height}px;">
       <div class="amp-head">
         <div class="amp-head-top">
           <span class="amp-logo">${ampLabel}</span>
@@ -2354,7 +2559,7 @@ function renderBoard(recommendation) {
         </div>
       </div>
       <div class="amp-cabinet"><div class="amp-grill-cloth"></div></div>
-      <div class="jack input" data-node-id="${AMP_NODE_ID}" title="Amp Input"></div>
+      <div class="jack input${inputClassFor(AMP_NODE_ID)}" data-node-id="${AMP_NODE_ID}" title="Amp Input"></div>
     </article>
 
     ${pedalNodes}
@@ -2374,13 +2579,17 @@ function renderBoardCables() {
   elements.boardCableLayer.setAttribute("height", `${height}`);
 
   const segments = [];
-  (state.canvasConnections || []).forEach(([src, dst]) => {
+  (state.canvasConnections || []).forEach(([src, dst], edgeIndex) => {
     const start = src === GUITAR_NODE_ID ? guitarOutputPos() : pedalOutputPos(src);
     const end = dst === AMP_NODE_ID ? ampInputPos() : pedalInputPos(dst);
     const points = buildConnectionPath(start, end, src, dst);
     if (points.length >= 2) {
       segments.push(`
-        <polyline points="${points.map((p) => `${p.x},${p.y}`).join(" ")}" class="cable-line" />
+        <polyline
+          points="${points.map((p) => `${p.x},${p.y}`).join(" ")}"
+          class="cable-line ${runtime.selectedEdgeIndex === edgeIndex ? "selected" : ""}"
+          data-edge-index="${edgeIndex}"
+        />
       `);
     }
   });
@@ -2400,6 +2609,38 @@ function renderBoardCables() {
   }
 
   elements.boardCableLayer.innerHTML = segments.join("");
+}
+
+function snapshotConnections() {
+  runtime.connectionHistory.push(deepClone(state.canvasConnections || []));
+  if (runtime.connectionHistory.length > 40) {
+    runtime.connectionHistory.shift();
+  }
+}
+
+function undoConnectionMutation() {
+  if (!runtime.connectionHistory.length) {
+    showToast("No cable changes to undo.");
+    return;
+  }
+  state.canvasConnections = runtime.connectionHistory.pop();
+  runtime.selectedEdgeIndex = -1;
+  renderAll();
+  persistState();
+  showToast("Undid last cable edit.");
+}
+
+function deleteSelectedConnection() {
+  if (runtime.selectedEdgeIndex < 0 || runtime.selectedEdgeIndex >= state.canvasConnections.length) {
+    return false;
+  }
+  snapshotConnections();
+  state.canvasConnections.splice(runtime.selectedEdgeIndex, 1);
+  runtime.selectedEdgeIndex = -1;
+  renderAll();
+  persistState();
+  showToast("Cable removed.");
+  return true;
 }
 
 function connectionObstacles(sourceNode = null, targetNode = null) {
@@ -2788,10 +3029,12 @@ function briefSettingsLine(pedalId, settings = {}) {
 
 function renderRigSetupTab(recommendation) {
   const connected = state.connectedChain;
+  const reachable = computeReachableChainFromGuitar();
+  const displayChain = connected.length ? connected : (reachable.length ? reachable : state.chain);
 
-  if (connected.length) {
+  if (displayChain.length) {
     elements.rigPedalEmpty.hidden = true;
-    elements.rigPedalCards.innerHTML = connected
+    elements.rigPedalCards.innerHTML = displayChain
       .map((pedalId) => {
         const settings = recommendation.pedals[pedalId] || {};
         return `
@@ -2802,6 +3045,15 @@ function renderRigSetupTab(recommendation) {
   } else {
     elements.rigPedalEmpty.hidden = false;
     elements.rigPedalCards.innerHTML = "";
+  }
+
+  if (!connected.length && displayChain.length) {
+    elements.rigPedalEmpty.hidden = false;
+    elements.rigPedalEmpty.textContent =
+      "Signal is not fully wired to the amp yet. Showing placed/reachable pedals with current recommendations.";
+  } else {
+    elements.rigPedalEmpty.textContent =
+      "No connected signal chain yet. Add pedals and cable them from guitar to amp.";
   }
 
   const guitar = recommendation.guitar;
@@ -2845,17 +3097,25 @@ function renderRigSetupTab(recommendation) {
 
 function renderRigSummary(recommendation) {
   const amp = recommendation.amp || {};
-  const unpatched = state.chain.filter((pedalId) => !state.connectedChain.includes(pedalId));
+  const connected = state.connectedChain;
+  const reachable = computeReachableChainFromGuitar();
+  const activeSignal = connected.length ? connected : (reachable.length ? reachable : state.chain);
+  const unpatched = state.chain.filter((pedalId) => !activeSignal.includes(pedalId));
   const styleChords = extractConcertChordsForGenre(state.genre);
   const bestKey = determineBestNashvilleKey(styleChords);
+  const chainLine = connected.length
+    ? `Guitar -> ${activeSignal.map((id) => PEDAL_LIBRARY[id].model).join(" -> ")} -> AMP`
+    : activeSignal.length
+      ? `Guitar -> ${activeSignal.map((id) => PEDAL_LIBRARY[id].model).join(" -> ")} (continue wiring to AMP)`
+      : "Guitar -> (none) -> AMP";
   const bullets = [
     `Style: ${recommendation.label}`,
     `Guitar: ${state.guitarType === "acoustic" ? "Acoustic" : "Electric"} | Profile: ${recommendation.guitar?.label || "Default"}`,
     `Amp: ${recommendation.ampLabel} (${amp.voicing || "Custom"})`,
     `Amp Dial: Gain ${quickKnob(amp.gain)}, Bass ${quickKnob(amp.bass)}, Mid ${quickKnob(amp.mid)}, Treble ${quickKnob(amp.treble)}, Presence ${quickKnob(amp.presence)}, Master ${quickKnob(amp.master)}`,
-    `Signal Chain: ${state.connectedChain.length ? `Guitar -> ${state.connectedChain.map((id) => PEDAL_LIBRARY[id].model).join(" -> ")} -> AMP` : "Guitar -> (none) -> AMP"}`,
+    `Signal Chain: ${chainLine}`,
     `Suggested Key Center: ${bestKey}`,
-    ...state.connectedChain.map((pedalId) => `${PEDAL_LIBRARY[pedalId].model} active in chain`),
+    ...activeSignal.map((pedalId) => `${PEDAL_LIBRARY[pedalId].model} active in chain`),
   ];
   if (unpatched.length) {
     bullets.push(`Not currently chained to amp: ${unpatched.map((id) => PEDAL_LIBRARY[id].model).join(", ")}`);
@@ -2906,6 +3166,20 @@ function bindTheoryEvents() {
     runtime.crazyPayloadCache.set(state.genre, makeCrazyPayload(state.genre));
     renderTheoryTab(runtime.lastRecommendation);
   });
+
+  elements.circleOfFifths.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest(".fifths-node[data-key]") : null;
+    if (!target) {
+      return;
+    }
+    const nextKey = target.dataset.key;
+    if (!nextKey || tableRowForKey(nextKey) < 0) {
+      return;
+    }
+    state.selectedTheoryKey = nextKey;
+    renderTheoryTab(runtime.lastRecommendation);
+    persistState();
+  });
 }
 
 function renderTheoryTab(recommendation) {
@@ -2927,10 +3201,14 @@ function renderTheoryTab(recommendation) {
 
   const selectedChords = nashvilleDegreesForKey(selectedKey);
   const highlight = selectedChords.length ? selectedChords : styleChords;
-  renderCircleOfFifths(highlight);
-  elements.circleHint.textContent = highlight.length
-    ? `Highlighted from selected key ${selectedKey}: ${highlight.join(", ")}`
+  renderCircleOfFifths(highlight, selectedKey);
+  const sevenChordLine = selectedChords.length
+    ? `${selectedKey} diatonic 7: ${selectedChords.join(" - ")}`
+    : `${selectedKey} diatonic 7: (not found)`;
+  const highlightedLine = highlight.length
+    ? `Highlighted chord family: ${highlight.join(", ")}`
     : "Highlighted from selected Nashville key or suggested style center.";
+  elements.circleHint.textContent = `${sevenChordLine} | ${highlightedLine}`;
 
   renderScaleChart(selectedKey, state.theoryShape, state.theoryScale);
   const scale = SCALE_LIBRARY[state.theoryScale] || SCALE_LIBRARY.minor_pentatonic;
@@ -2950,7 +3228,7 @@ function highlightNashvilleRows(selectedKey, usualMajorKeys) {
   });
 }
 
-function renderCircleOfFifths(highlightChords) {
+function renderCircleOfFifths(highlightChords, selectedKey = "") {
   const highlighted = new Set(
     (highlightChords || [])
       .map((token) => majorKeyForSelection(token))
@@ -2970,8 +3248,10 @@ function renderCircleOfFifths(highlightChords) {
     const majorLabel = CIRCLE_FIFTHS_MAJOR_DISPLAY[major] || major;
     const minorLabel = CIRCLE_FIFTHS_MINOR_DISPLAY[minor] || minor;
     const active = highlighted.has(major);
+    const selected = major === selectedKey;
+    const family = nashvilleDegreesForKey(major);
     return `
-      <g class="fifths-node ${active ? "active" : ""}">
+      <g class="fifths-node ${active ? "active" : ""} ${selected ? "selected" : ""}" data-key="${major}" title="${family.join(" - ")}">
         <circle cx="${x}" cy="${y}" r="20"></circle>
         <text class="major" x="${x}" y="${y - 3}" text-anchor="middle">${majorLabel}</text>
         <text class="minor" x="${x}" y="${y + 11}" text-anchor="middle">${minorLabel}</text>
