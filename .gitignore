@@ -11,6 +11,9 @@ PedalArchitect.app/
 build/
 dist/
 *.spec
+.build_venv/
+.pyinstaller_work/
+.pyinstaller_spec/
 AGENTS.md
 **/AGENTS.md
 **/agents.md

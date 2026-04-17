@@ -57,14 +57,18 @@ This file is sensitive and intentionally gitignored.
 ## Build Contained App
 
 ```bash
-./build_py_app.sh
+python3 build_app.py
 ```
 
-Build behavior:
+Build behavior (`build_app.py`):
 
+- Creates a temporary virtual environment (`.build_venv/`).
+- Installs build dependencies from `requirements-pyqt.txt`.
+- Runs PyInstaller with bundled `assets/` and `data/`.
 - Backs up previous executable artifacts into `backups/executable_backup_<timestamp>/`
 - Writes the new executable next to `pyqt_app.py`:
   - `PedalArchitect.app`
+- Removes temporary virtualenv/work/spec files after completion (or failure).
 
 ## Backup Naming
 

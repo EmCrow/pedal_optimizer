@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-17 (py_app_modular build simplification)
+- Added a single cross-platform build entrypoint: `build_app.py`.
+- Build flow now bootstraps its own temporary virtualenv, installs `requirements-pyqt.txt`, packages via PyInstaller, and cleans temporary files automatically.
+- Builder now bundles `assets/` and `data/` directly from CLI flags (no external `.spec` dependency).
+- Removed redundant build wrappers: `build_py_app.sh`, `automation/build_macos.sh`, `automation/build_windows.ps1`.
+- Updated build docs to use the one-command Python workflow.
+
 ## 2026-04-16 (py_app)
 - Added `Rig Setup` and `Theory` tab split.
 - Added scale-aware CAGED neck rendering and expanded scale selector.

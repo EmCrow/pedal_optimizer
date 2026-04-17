@@ -1350,18 +1350,91 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 return pedal_id
         return None
 
-    def draw_link(self, painter, points, color, width=3, dashed=False):
+    def draw_flow_markers(self, painter, points, color, spacing=46):
         if len(points) < 2:
             return
-        pen = QtGui.QPen(QtGui.QColor(color), width, QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
-        pen.setCapStyle(QtCore.Qt.RoundCap)
-        pen.setJoinStyle(QtCore.Qt.RoundJoin)
-        painter.setPen(pen)
+        base = QtGui.QColor(color)
+        luminance = (0.2126 * base.redF()) + (0.7152 * base.greenF()) + (0.0722 * base.blueF())
+        fill_color = base.lighter(165) if luminance < 0.45 else base.darker(165)
+        outline_color = base.darker(210) if luminance > 0.45 else base.lighter(190)
+        fill_color.setAlpha(190)
+        outline_color.setAlpha(145)
+        painter.setPen(QtGui.QPen(outline_color, 0.9))
+        painter.setBrush(QtGui.QBrush(fill_color))
+
+        for idx in range(len(points) - 1):
+            p1 = points[idx]
+            p2 = points[idx + 1]
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            seg_len = abs(dx) + abs(dy)
+            if seg_len < 24:
+                continue
+            marker_count = max(1, seg_len // spacing)
+            for marker_idx in range(marker_count):
+                t = float(marker_idx + 1) / float(marker_count + 1)
+                mx = p1.x() + int(round(dx * t))
+                my = p1.y() + int(round(dy * t))
+                if abs(dx) >= abs(dy):
+                    if dx >= 0:
+                        tri = QtGui.QPolygonF(
+                            [
+                                QtCore.QPointF(mx + 4.5, my),
+                                QtCore.QPointF(mx - 2.8, my - 3.2),
+                                QtCore.QPointF(mx - 2.8, my + 3.2),
+                            ]
+                        )
+                    else:
+                        tri = QtGui.QPolygonF(
+                            [
+                                QtCore.QPointF(mx - 4.5, my),
+                                QtCore.QPointF(mx + 2.8, my - 3.2),
+                                QtCore.QPointF(mx + 2.8, my + 3.2),
+                            ]
+                        )
+                else:
+                    if dy >= 0:
+                        tri = QtGui.QPolygonF(
+                            [
+                                QtCore.QPointF(mx, my + 4.5),
+                                QtCore.QPointF(mx - 3.2, my - 2.8),
+                                QtCore.QPointF(mx + 3.2, my - 2.8),
+                            ]
+                        )
+                    else:
+                        tri = QtGui.QPolygonF(
+                            [
+                                QtCore.QPointF(mx, my - 4.5),
+                                QtCore.QPointF(mx - 3.2, my + 2.8),
+                                QtCore.QPointF(mx + 3.2, my + 2.8),
+                            ]
+                        )
+                painter.drawPolygon(tri)
+
+    def draw_link(self, painter, points, color, width=3, dashed=False, flow_markers=False):
+        if len(points) < 2:
+            return
+        line_color = QtGui.QColor(color)
+        under_color = QtGui.QColor(line_color)
+        under_color = under_color.darker(165)
+        under_color.setAlpha(120 if not dashed else 70)
+
+        under_pen = QtGui.QPen(under_color, width + (1 if not dashed else 0), QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
+        under_pen.setCapStyle(QtCore.Qt.RoundCap)
+        under_pen.setJoinStyle(QtCore.Qt.RoundJoin)
+        painter.setPen(under_pen)
         painter.setBrush(QtCore.Qt.NoBrush)
         path = QtGui.QPainterPath(points[0])
         for point in points[1:]:
             path.lineTo(point)
         painter.drawPath(path)
+        pen = QtGui.QPen(line_color, width, QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.drawPath(path)
+        if flow_markers and not dashed:
+            self.draw_flow_markers(painter, points, line_color)
 
     def segment_intersects_rect(self, p1, p2, rect):
         if p1.x() == p2.x():
@@ -1385,8 +1458,80 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                     return True
         return False
 
-    def route_grid_path(self, start_stub, end_stub, obstacles, min_x, max_x, min_y, max_y):
+    def path_segments(self, points):
+        segments = []
+        if len(points) < 2:
+            return segments
+        for idx in range(len(points) - 1):
+            p1 = points[idx]
+            p2 = points[idx + 1]
+            if p1.x() == p2.x():
+                segments.append(
+                    {
+                        "ori": "v",
+                        "x": p1.x(),
+                        "y1": min(p1.y(), p2.y()),
+                        "y2": max(p1.y(), p2.y()),
+                    }
+                )
+            elif p1.y() == p2.y():
+                segments.append(
+                    {
+                        "ori": "h",
+                        "y": p1.y(),
+                        "x1": min(p1.x(), p2.x()),
+                        "x2": max(p1.x(), p2.x()),
+                    }
+                )
+        return segments
+
+    def parallel_segment_penalty(self, p1, p2, wire_segments, lane_padding=12):
+        if not wire_segments:
+            return 0
+        penalty = 0
+        if p1.x() == p2.x():
+            x = p1.x()
+            y1 = min(p1.y(), p2.y())
+            y2 = max(p1.y(), p2.y())
+            for seg in wire_segments:
+                if seg.get("ori") != "v":
+                    continue
+                overlap = min(y2, seg["y2"]) - max(y1, seg["y1"])
+                if overlap < 0:
+                    continue
+                delta = abs(x - seg["x"])
+                if delta == 0:
+                    penalty += 50000
+                elif delta <= lane_padding:
+                    penalty += (lane_padding - delta + 1) * 2600
+        elif p1.y() == p2.y():
+            y = p1.y()
+            x1 = min(p1.x(), p2.x())
+            x2 = max(p1.x(), p2.x())
+            for seg in wire_segments:
+                if seg.get("ori") != "h":
+                    continue
+                overlap = min(x2, seg["x2"]) - max(x1, seg["x1"])
+                if overlap < 0:
+                    continue
+                delta = abs(y - seg["y"])
+                if delta == 0:
+                    penalty += 50000
+                elif delta <= lane_padding:
+                    penalty += (lane_padding - delta + 1) * 2600
+        return penalty
+
+    def path_parallel_penalty(self, points, wire_segments):
+        if not wire_segments or len(points) < 2:
+            return 0
+        total = 0
+        for idx in range(len(points) - 1):
+            total += self.parallel_segment_penalty(points[idx], points[idx + 1], wire_segments)
+        return total
+
+    def route_grid_path(self, start_stub, end_stub, obstacles, min_x, max_x, min_y, max_y, wire_segments=None):
         step = 6
+        wire_segments = wire_segments or []
 
         def snap(value, lo, hi):
             snapped = int(round(value / step) * step)
@@ -1454,7 +1599,10 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 neighbor = (nx, ny)
                 if neighbor in closed or is_blocked(nx, ny):
                     continue
-                tentative = current_cost + step
+                move_penalty = self.parallel_segment_penalty(QtCore.QPoint(cx, cy), QtCore.QPoint(nx, ny), wire_segments)
+                if move_penalty >= 50000:
+                    continue
+                tentative = current_cost + step + move_penalty
                 if tentative < g_score.get(neighbor, 1 << 30):
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative
@@ -1482,10 +1630,22 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 obstacles.append(padded)
         return obstacles
 
-    def build_connection_path(self, start, end, source_node=None, target_node=None):
+    def build_connection_path(self, start, end, source_node=None, target_node=None, wire_segments=None):
+        wire_segments = wire_segments or []
         stub = 14
         start_stub = QtCore.QPoint(start.x() - stub, start.y())
         end_stub = QtCore.QPoint(end.x() + stub, end.y())
+        start_anchors = [
+            start_stub,
+            QtCore.QPoint(start.x(), clamp(start.y() - stub, 8, max(8, self.height() - 8))),
+            QtCore.QPoint(start.x(), clamp(start.y() + stub, 8, max(8, self.height() - 8))),
+        ]
+        end_anchors = [
+            end_stub,
+            QtCore.QPoint(end.x(), clamp(end.y() - stub, 8, max(8, self.height() - 8))),
+            QtCore.QPoint(end.x(), clamp(end.y() + stub, 8, max(8, self.height() - 8))),
+            end,
+        ]
         obstacles = self.connection_obstacles(source_node, target_node)
         min_y = 8
         max_y = max(min_y, self.height() - 8)
@@ -1499,24 +1659,85 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                     out.append(pt)
             return out
 
+        def dedupe_anchor_points(points):
+            unique = []
+            seen = set()
+            for pt in points:
+                key = (pt.x(), pt.y())
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(QtCore.QPoint(pt.x(), pt.y()))
+            return unique
+
         def path_length(points):
             total = 0
             for i in range(len(points) - 1):
                 total += abs(points[i + 1].x() - points[i].x()) + abs(points[i + 1].y() - points[i].y())
             return total
 
+        def has_exact_axis_overlap(points, minimum_overlap=3):
+            if len(points) < 2 or not wire_segments:
+                return False
+            segments = self.path_segments(points)
+            for seg in segments:
+                for existing in wire_segments:
+                    if seg.get("ori") != existing.get("ori"):
+                        continue
+                    if seg.get("ori") == "h":
+                        if seg["y"] != existing["y"]:
+                            continue
+                        overlap = min(seg["x2"], existing["x2"]) - max(seg["x1"], existing["x1"])
+                    else:
+                        if seg["x"] != existing["x"]:
+                            continue
+                        overlap = min(seg["y2"], existing["y2"]) - max(seg["y1"], existing["y1"])
+                    if overlap >= minimum_overlap:
+                        return True
+            return False
+
+        lane_padding = 12
+
+        def nudge_lane(value, orientation):
+            if not wire_segments:
+                return value
+            lo, hi = (min_y, max_y) if orientation == "h" else (min_x, max_x)
+            lane = clamp(int(value), lo, hi)
+            for _ in range(10):
+                moved = False
+                for seg in wire_segments:
+                    if seg.get("ori") != orientation:
+                        continue
+                    taken = seg["y"] if orientation == "h" else seg["x"]
+                    delta = lane - int(taken)
+                    if abs(delta) <= lane_padding:
+                        shift = lane_padding + 1 - abs(delta)
+                        if shift <= 0:
+                            shift = lane_padding
+                        lane = clamp(lane + (shift if delta >= 0 else -shift), lo, hi)
+                        moved = True
+                if not moved:
+                    break
+            return lane
+
         candidates = []
-        candidates.append(
-            [
-                start,
-                start_stub,
-                QtCore.QPoint(end_stub.x(), start_stub.y()),
-                end_stub,
-                end,
-            ]
-        )
+        x_offsets = [0, -14, 14, -28, 28, -42, 42]
+        start_x_candidates = []
+        end_x_candidates = []
+        seen_start_x = set()
+        seen_end_x = set()
+        for offset in x_offsets:
+            sx = nudge_lane(clamp(start_stub.x() + offset, min_x, max_x), "v")
+            ex = nudge_lane(clamp(end_stub.x() + offset, min_x, max_x), "v")
+            if sx not in seen_start_x:
+                seen_start_x.add(sx)
+                start_x_candidates.append(sx)
+            if ex not in seen_end_x:
+                seen_end_x.add(ex)
+                end_x_candidates.append(ex)
 
         y_candidates = {clamp(start_stub.y(), min_y, max_y), clamp(end_stub.y(), min_y, max_y)}
+        y_candidates.add(clamp((start.y() + end.y()) // 2, min_y, max_y))
         if obstacles:
             top = min(rect.top() for rect in obstacles)
             bottom = max(rect.bottom() for rect in obstacles)
@@ -1539,51 +1760,68 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 }
             )
 
-        for y in sorted(y_candidates):
-            candidates.append(
-                [
-                    start,
-                    start_stub,
-                    QtCore.QPoint(start_stub.x(), y),
-                    QtCore.QPoint(end_stub.x(), y),
-                    end_stub,
-                    end,
-                ]
-            )
+        for sx in start_x_candidates:
+            for ex in end_x_candidates:
+                for y in sorted(y_candidates):
+                    y_lane = nudge_lane(y, "h")
+                    candidates.append(
+                        [
+                            start,
+                            QtCore.QPoint(sx, start.y()),
+                            QtCore.QPoint(sx, y_lane),
+                            QtCore.QPoint(ex, y_lane),
+                            QtCore.QPoint(ex, end.y()),
+                            end,
+                        ]
+                    )
 
-        x_candidates = {clamp(min(start_stub.x(), end_stub.x()) - 20, min_x, max_x), clamp(max(start_stub.x(), end_stub.x()) + 20, min_x, max_x)}
-        for rect in obstacles:
-            x_candidates.add(clamp(rect.left() - 16, min_x, max_x))
-            x_candidates.add(clamp(rect.right() + 16, min_x, max_x))
-        for x in sorted(x_candidates):
-            candidates.append(
-                [
-                    start,
-                    start_stub,
-                    QtCore.QPoint(x, start_stub.y()),
-                    QtCore.QPoint(x, end_stub.y()),
-                    end_stub,
-                    end,
-                ]
-            )
+        candidates.append(
+            [
+                start,
+                start_stub,
+                QtCore.QPoint(end_stub.x(), start_stub.y()),
+                end_stub,
+                end,
+            ]
+        )
 
         valid = []
         for points in candidates:
             pts = dedupe_points(points)
             if len(pts) < 2:
                 continue
-            if not self.polyline_hits_obstacles(pts, obstacles):
-                valid.append((path_length(pts), pts))
+            if self.polyline_hits_obstacles(pts, obstacles):
+                continue
+            if has_exact_axis_overlap(pts):
+                continue
+            valid.append((self.path_parallel_penalty(pts, wire_segments), path_length(pts), pts))
 
+        best_candidate = None
         if valid:
-            valid.sort(key=lambda item: item[0])
-            return valid[0][1]
+            valid.sort(key=lambda item: (item[0], item[1]))
+            best_candidate = valid[0]
 
-        grid_path = self.route_grid_path(start_stub, end_stub, obstacles, min_x, max_x, min_y, max_y)
-        if grid_path:
-            routed = dedupe_points([start] + grid_path + [end])
-            if not self.polyline_hits_obstacles(routed, obstacles):
-                return routed
+        best_grid = None
+        for grid_start in dedupe_anchor_points(start_anchors):
+            for grid_target in dedupe_anchor_points(end_anchors):
+                grid_path = self.route_grid_path(grid_start, grid_target, obstacles, min_x, max_x, min_y, max_y, wire_segments=wire_segments)
+                if not grid_path:
+                    continue
+                routed = dedupe_points([start] + grid_path + [end])
+                if self.polyline_hits_obstacles(routed, obstacles):
+                    continue
+                if has_exact_axis_overlap(routed):
+                    continue
+                routed_score = (self.path_parallel_penalty(routed, wire_segments), path_length(routed))
+                if best_grid is None or routed_score < (best_grid[0], best_grid[1]):
+                    best_grid = (routed_score[0], routed_score[1], routed)
+
+        if best_grid is not None:
+            if best_candidate is None or (best_grid[0], best_grid[1]) < (best_candidate[0], best_candidate[1]):
+                return best_grid[2]
+
+        if best_candidate is not None:
+            return best_candidate[2]
 
         return dedupe_points(
             [
@@ -1789,6 +2027,8 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#edf2fb")))
         painter.drawEllipse(self.amp_input_pos(), 5, 5)
 
+        connection_paths = []
+        wire_segments = []
         for src, dst in self.connections:
             if src != GUITAR_NODE_ID and src not in self.pedal_ids:
                 continue
@@ -1796,8 +2036,12 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 continue
             start = self.guitar_output_pos() if src == GUITAR_NODE_ID else self.pedal_output_pos(src)
             end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
-            path_points = self.build_connection_path(start, end, src, dst)
-            self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3)
+            path_points = self.build_connection_path(start, end, src, dst, wire_segments=wire_segments)
+            connection_paths.append(path_points)
+            wire_segments.extend(self.path_segments(path_points))
+
+        for path_points in connection_paths:
+            self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3, flow_markers=True)
 
         if self.link_start and self.preview_link_to:
             start = self.guitar_output_pos() if self.link_start == GUITAR_NODE_ID else self.pedal_output_pos(self.link_start)
@@ -2692,13 +2936,16 @@ def caged_window_start(root_fret, shape_key, scale_family):
 class PentatonicNeckWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(520, 330)
+        self.setMinimumSize(520, 260)
         self.theme = THEMES["dark"]
         self.key_name = "C"
         self.shape_key = "g"
         self.scale_key = "minor_pentatonic"
         self.start_fret = 0
         self.end_fret = 5
+        self.shape_fret_start = 0
+        self.shape_fret_end = 5
+        self.shape_highlight_frets = set()
         self.note_points = []
         self.update_pattern()
 
@@ -2721,9 +2968,12 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         scale = self.current_scale()
         root_pc = pitch_class_for_key_name(self.key_name)
         root_fret = preferred_root_fret(root_pc)
-        start, window_size = caged_window_start(root_fret, self.shape_key, scale.get("family", "minor"))
-        end = min(16, start + window_size)
+        start = 0
+        end = 15
         intervals = set(scale.get("intervals", []))
+        scale_family = str(scale.get("family", "minor"))
+        shape_start, shape_window = caged_window_start(root_fret, self.shape_key, scale_family)
+        shape_end = shape_start + shape_window
 
         points = []
         for string_idx, open_pc in enumerate(STANDARD_TUNING_PCS_TOP_TO_BOTTOM):
@@ -2741,14 +2991,25 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
                     }
                 )
 
+        clamped_start = clamp(shape_start, start, end)
+        clamped_end = clamp(shape_end, start, end)
+        highlight_frets = set(range(min(clamped_start, clamped_end), max(clamped_start, clamped_end) + 1))
+
         self.start_fret = start
         self.end_fret = end
+        self.shape_highlight_frets = highlight_frets
+        if highlight_frets:
+            self.shape_fret_start = min(highlight_frets)
+            self.shape_fret_end = max(highlight_frets)
+        else:
+            self.shape_fret_start = start
+            self.shape_fret_end = end
         self.note_points = points
 
     def summary_text(self):
         shape_label = CAGED_SHAPES.get(self.shape_key, CAGED_SHAPES["g"])["label"]
         scale = self.current_scale()
-        return f"{self.key_name} {scale['label']} • {shape_label} • frets {self.start_fret}-{self.end_fret}"
+        return f"{self.key_name} {scale['label']} • {shape_label} • shape frets {self.shape_fret_start}-{self.shape_fret_end}"
 
     def contrast_text(self, color):
         # Relative luminance approximation for readable note labels.
@@ -2779,6 +3040,23 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         fret_count = max(3, self.end_fret - self.start_fret + 1)
         string_gap = fretboard.height() / max(1, strings - 1)
         fret_gap = fretboard.width() / max(1, fret_count)
+
+        # Highlight selected CAGED-shape fret columns.
+        shape_fill = QtGui.QColor(self.theme.get("tab_selected_bg", self.theme.get("positive", "#66d17a")))
+        shape_fill.setAlpha(38)
+        shape_edge = QtGui.QColor(shape_fill)
+        shape_edge.setAlpha(125)
+        shape_edge = shape_edge.darker(120)
+        painter.setPen(QtGui.QPen(shape_edge, 1.0))
+        painter.setBrush(QtGui.QBrush(shape_fill))
+        for fret in sorted(self.shape_highlight_frets):
+            idx = fret - self.start_fret
+            if idx < 0 or idx >= fret_count:
+                continue
+            left = fretboard.left() + idx * fret_gap + 1.2
+            width = max(4.0, fret_gap - 2.4)
+            rect = QtCore.QRectF(left, fretboard.top() + 1.2, width, max(10.0, fretboard.height() - 2.4))
+            painter.drawRoundedRect(rect, 3.5, 3.5)
 
         # Strings
         for idx in range(strings):
@@ -2858,16 +3136,24 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
             fret = self.start_fret + idx
             x = fretboard.left() + (idx + 0.5) * fret_gap
             box = QtCore.QRectF(x - 18, fretboard.bottom() + 8, 36, 24)
-            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"]).lighter(110)))
-            painter.drawRoundedRect(box, 4, 4)
-            painter.setPen(QtGui.QColor(self.theme["text"]))
+            if fret in self.shape_highlight_frets:
+                box_fill = QtGui.QColor(self.theme.get("tab_selected_bg", self.theme["panel"])).lighter(155)
+                box_fill.setAlpha(225)
+                painter.setPen(QtGui.QPen(QtGui.QColor(self.theme.get("tab_selected_bg", self.theme["frame"])).darker(132), 1.2))
+                painter.setBrush(QtGui.QBrush(box_fill))
+                painter.drawRoundedRect(box, 4, 4)
+                painter.setPen(self.contrast_text(box_fill))
+            else:
+                painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
+                painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"]).lighter(110)))
+                painter.drawRoundedRect(box, 4, 4)
+                painter.setPen(QtGui.QColor(self.theme["text"]))
             painter.drawText(box, QtCore.Qt.AlignCenter, str(fret))
 
 class CircleOfFifthsWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(320, 320)
+        self.setMinimumSize(250, 230)
         self.theme = THEMES["dark"]
         self.major_highlights = set()
         self.minor_highlights = set()
@@ -2910,7 +3196,7 @@ class CircleOfFifthsWidget(QtWidgets.QWidget):
         painter.setPen(highlight_fg if active else text_color)
         font = painter.font()
         font.setBold(active)
-        font.setPointSize(max(8, font.pointSize() - (1 if is_minor else 0)))
+        font.setPointSize(11)
         painter.setFont(font)
         painter.drawText(
             QtCore.QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2),
@@ -2962,13 +3248,49 @@ class CircleOfFifthsWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QColor(self.theme["text"]))
         center_font = painter.font()
         center_font.setBold(True)
-        center_font.setPointSize(max(8, center_font.pointSize() - 1))
+        center_font.setPointSize(11)
         painter.setFont(center_font)
         painter.drawText(
             QtCore.QRectF(center.x() - 52, center.y() - 26, 104, 52),
             QtCore.Qt.AlignCenter,
             "Circle\nof Fifths",
         )
+
+
+class TheoryPanelSubWindow(QtWidgets.QMdiSubWindow):
+    restored_from_minimize = QtCore.pyqtSignal(str)
+    minimized_changed = QtCore.pyqtSignal(str, bool)
+    geometry_changed = QtCore.pyqtSignal(str)
+
+    def __init__(self, panel_key, parent=None):
+        super().__init__(parent)
+        self.panel_key = panel_key
+
+    def changeEvent(self, event):
+        if event.type() == QtCore.QEvent.WindowStateChange and hasattr(event, "oldState"):
+            old_state = event.oldState()
+            super().changeEvent(event)
+            new_state = self.windowState()
+            was_minimized = bool(old_state & QtCore.Qt.WindowMinimized)
+            is_minimized = bool(new_state & QtCore.Qt.WindowMinimized)
+            if was_minimized != is_minimized:
+                self.minimized_changed.emit(self.panel_key, is_minimized)
+            if was_minimized and not is_minimized:
+                self.restored_from_minimize.emit(self.panel_key)
+            if not is_minimized:
+                self.geometry_changed.emit(self.panel_key)
+            return
+        super().changeEvent(event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if not (self.windowState() & QtCore.Qt.WindowMinimized):
+            self.geometry_changed.emit(self.panel_key)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not (self.windowState() & QtCore.Qt.WindowMinimized):
+            self.geometry_changed.emit(self.panel_key)
 
 
 class PedalShowcaseWidget(QtWidgets.QWidget):
@@ -3220,6 +3542,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "chain": list(DEFAULT_CHAIN),
             "canvasPositions": {},
             "canvasConnections": [],
+            "theoryPanelLayout": {},
+            "theoryPanelRows": 2,
         }
         self.connected_chain = []
         self.last_recommendation = None
@@ -3233,6 +3557,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.app_config = self.load_app_config()
         self.feedback_limits_state = self.load_feedback_limiter_state()
         self.feedback_user_id = self.feedback_user_hash()
+        self._theory_snap_timers = {}
+        self._applying_theory_layout = False
 
         self._loading_ui = False
         self.load_state()
@@ -3244,7 +3570,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
-        root.setContentsMargins(14, 14, 14, 14)
+        root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
         self.build_global_controls(root)
@@ -3252,11 +3578,11 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         root.addWidget(self.tabs)
 
-        self.builder_tab = QtWidgets.QWidget()
-        self.pedals_tab = QtWidgets.QWidget()
-        self.rig_setup_tab = QtWidgets.QWidget()
-        self.theory_tab = QtWidgets.QWidget()
-        self.feedback_tab = QtWidgets.QWidget()
+        self.pedals_tab, self.pedals_tab_content = self.make_scrollable_tab()
+        self.builder_tab, self.builder_tab_content = self.make_scrollable_tab()
+        self.rig_setup_tab, self.rig_setup_tab_content = self.make_scrollable_tab()
+        self.theory_tab, self.theory_tab_content = self.make_scrollable_tab()
+        self.feedback_tab, self.feedback_tab_content = self.make_scrollable_tab()
 
         self.tabs.addTab(self.pedals_tab, "Pedals")
         self.tabs.addTab(self.builder_tab, "Builder")
@@ -3273,9 +3599,28 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.bind_builder_events()
         QtCore.QTimer.singleShot(0, self.initialize_splitter_sizes)
 
+    def make_scrollable_tab(self):
+        page = QtWidgets.QWidget()
+        page_layout = QtWidgets.QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+        return page, content
+
     def initialize_splitter_sizes(self):
         if hasattr(self, "builder_splitter"):
-            self.builder_splitter.setSizes([360, 980])
+            total_width = max(self.builder_splitter.width(), 920)
+            left_width = clamp(int(total_width * 0.30), 260, 420)
+            self.builder_splitter.setSizes([left_width, max(520, total_width - left_width)])
 
     def build_global_controls(self, root_layout):
         controls = QtWidgets.QFrame()
@@ -3285,12 +3630,12 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         controls_layout.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
 
         self.genre_combo = QtWidgets.QComboBox()
-        self.genre_combo.setMinimumWidth(170)
-        self.genre_combo.setMaximumWidth(230)
+        self.genre_combo.setMinimumWidth(150)
+        self.genre_combo.setMaximumWidth(220)
 
         style_wrap = QtWidgets.QGroupBox("Style")
-        style_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        style_wrap.setMinimumWidth(250)
+        style_wrap.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        style_wrap.setMinimumWidth(210)
         style_layout = QtWidgets.QVBoxLayout(style_wrap)
         style_layout.setContentsMargins(8, 8, 8, 8)
         style_layout.setSpacing(6)
@@ -3303,7 +3648,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.guitar_type_group.addButton(self.guitar_type_acoustic)
 
         guitar_wrap = QtWidgets.QGroupBox("Guitar")
-        guitar_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        guitar_wrap.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         guitar_wrap.setMinimumWidth(150)
         guitar_layout = QtWidgets.QVBoxLayout(guitar_wrap)
         guitar_layout.setContentsMargins(8, 8, 8, 8)
@@ -3333,30 +3678,29 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         acoustic_controls_layout.setSpacing(6)
         self.acoustic_controls_text = QtWidgets.QLineEdit("Acoustic (Taylor ES2)")
         self.acoustic_controls_text.setReadOnly(True)
-        self.acoustic_controls_text.setMinimumWidth(260)
-        self.acoustic_controls_text.setMaximumWidth(320)
+        self.acoustic_controls_text.setMinimumWidth(220)
         acoustic_controls_layout.addWidget(self.acoustic_controls_text)
 
         self.guitar_controls_stack.addWidget(electric_controls_page)
         self.guitar_controls_stack.addWidget(acoustic_controls_page)
-        self.guitar_controls_stack.setMinimumWidth(280)
-        self.guitar_controls_stack.setMaximumWidth(420)
-        self.guitar_controls_stack.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.guitar_controls_stack.setMinimumWidth(240)
+        self.guitar_controls_stack.setMaximumWidth(460)
+        self.guitar_controls_stack.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         controls_wrap = QtWidgets.QGroupBox("Guitar Controls")
-        controls_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        controls_wrap.setMinimumWidth(320)
+        controls_wrap.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        controls_wrap.setMinimumWidth(250)
         controls_sub_layout = QtWidgets.QVBoxLayout(controls_wrap)
         controls_sub_layout.setContentsMargins(8, 8, 8, 8)
         controls_sub_layout.setSpacing(6)
         controls_sub_layout.addWidget(self.guitar_controls_stack)
 
         self.amp_combo = QtWidgets.QComboBox()
-        self.amp_combo.setMinimumWidth(220)
-        self.amp_combo.setMaximumWidth(260)
+        self.amp_combo.setMinimumWidth(180)
+        self.amp_combo.setMaximumWidth(240)
         amp_wrap = QtWidgets.QGroupBox("Amp")
-        amp_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        amp_wrap.setMinimumWidth(280)
+        amp_wrap.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        amp_wrap.setMinimumWidth(230)
         amp_layout = QtWidgets.QVBoxLayout(amp_wrap)
         amp_layout.setContentsMargins(8, 8, 8, 8)
         amp_layout.setSpacing(6)
@@ -3367,7 +3711,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.font_size_combo.setView(QtWidgets.QListView())
 
         self.optimize_btn = QtWidgets.QPushButton("Optimize For Me")
-        self.optimize_btn.setMinimumWidth(150)
+        self.optimize_btn.setMinimumWidth(130)
         self.save_btn = QtWidgets.QPushButton("Save Offline")
         self.settings_btn = QtWidgets.QToolButton()
         self.settings_btn.setText("⚙")
@@ -3406,7 +3750,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         root_layout.addWidget(controls)
 
     def build_builder_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.builder_tab)
+        layout = QtWidgets.QVBoxLayout(self.builder_tab_content)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(10)
 
         bank_group = QtWidgets.QGroupBox("Pedal Bank")
@@ -3455,7 +3800,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.builder_splitter.setStretchFactor(1, 7)
         layout.addWidget(self.builder_splitter, 1)
 
-        self.clean_up_btn = QtWidgets.QPushButton("Clean Up Layout")
+        self.clean_up_btn = QtWidgets.QPushButton("Tidy UP")
         self.auto_wire_btn = QtWidgets.QPushButton("Auto Wire")
         self.clear_cables_btn = QtWidgets.QPushButton("Clear Cables")
         self.reset_btn = QtWidgets.QPushButton("Reset Chain")
@@ -3469,7 +3814,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         layout.addLayout(builder_actions)
 
     def build_pedals_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.pedals_tab)
+        layout = QtWidgets.QVBoxLayout(self.pedals_tab_content)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(10)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -3524,16 +3870,9 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.pedal_selector_list.setCurrentRow(selected_row)
 
     def build_rig_setup_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.rig_setup_tab)
-        layout.setSpacing(10)
-
-        overview_row = QtWidgets.QHBoxLayout()
-        overview_row.setSpacing(10)
-        guitar_preview_group, self.guitar_preview = self.make_info_panel("Guitar")
-        amp_preview_group, self.amp_preview = self.make_info_panel("Amp")
-        overview_row.addWidget(guitar_preview_group, 1)
-        overview_row.addWidget(amp_preview_group, 1)
-        layout.addLayout(overview_row, 2)
+        layout = QtWidgets.QVBoxLayout(self.rig_setup_tab_content)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
         pedals_group = QtWidgets.QGroupBox("Pedal Settings")
         pedals_layout = QtWidgets.QVBoxLayout(pedals_group)
@@ -3565,33 +3904,72 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         summary_layout = QtWidgets.QVBoxLayout(summary_group)
         self.summary_text = QtWidgets.QTextEdit()
         self.summary_text.setReadOnly(True)
-        self.summary_text.setMinimumHeight(125)
+        self.summary_text.setMinimumHeight(96)
         summary_layout.addWidget(self.summary_text)
         layout.addWidget(summary_group, 1)
 
     def build_theory_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.theory_tab)
-        layout.setSpacing(10)
+        layout = QtWidgets.QVBoxLayout(self.theory_tab_content)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
-        analysis_row = QtWidgets.QHBoxLayout()
-        analysis_row.setSpacing(10)
+        pentatonic_group = QtWidgets.QGroupBox("Scale + CAGED Chart")
+        pentatonic_layout = QtWidgets.QVBoxLayout(pentatonic_group)
+        pentatonic_layout.setSpacing(6)
+        top_controls = QtWidgets.QHBoxLayout()
+        top_controls.setSpacing(8)
+        scale_label = QtWidgets.QLabel("Scale")
+        scale_font = QtGui.QFont(scale_label.font())
+        scale_font.setBold(True)
+        scale_label.setFont(scale_font)
+        top_controls.addWidget(scale_label)
+        self.scale_type_combo = QtWidgets.QComboBox()
+        self.scale_type_combo.setMinimumHeight(34)
+        for scale_key in ["minor_pentatonic", "major_pentatonic", "minor_blues", "major_scale", "natural_minor", "mixolydian"]:
+            self.scale_type_combo.addItem(SCALE_LIBRARY[scale_key]["label"], scale_key)
+        self.set_combo_by_data(self.scale_type_combo, self.state.get("theoryScale", "minor_pentatonic"))
+        top_controls.addWidget(self.scale_type_combo, 1)
+        shape_label = QtWidgets.QLabel("CAGED Shape")
+        shape_font = QtGui.QFont(shape_label.font())
+        shape_font.setBold(True)
+        shape_label.setFont(shape_font)
+        top_controls.addWidget(shape_label)
+        self.pentatonic_shape_combo = QtWidgets.QComboBox()
+        self.pentatonic_shape_combo.setMinimumHeight(34)
+        for shape_key in ["c", "a", "g", "e", "d"]:
+            self.pentatonic_shape_combo.addItem(CAGED_SHAPES[shape_key]["label"], shape_key)
+        self.set_combo_by_data(self.pentatonic_shape_combo, self.state.get("theoryShape", "g"))
+        top_controls.addWidget(self.pentatonic_shape_combo, 1)
+        pentatonic_layout.addLayout(top_controls)
 
-        circle_group = QtWidgets.QGroupBox("Circle of Fifths")
-        circle_layout = QtWidgets.QVBoxLayout(circle_group)
-        self.circle_of_fifths = CircleOfFifthsWidget()
-        self.circle_hint = QtWidgets.QLabel("Highlighted from selected Nashville key or suggested style center.")
-        self.circle_hint.setWordWrap(True)
-        circle_layout.addWidget(self.circle_of_fifths, 1)
-        circle_layout.addWidget(self.circle_hint)
-        analysis_row.addWidget(circle_group, 1)
+        self.pentatonic_hint = QtWidgets.QLabel("15-fret map for selected key.")
+        self.pentatonic_hint.setWordWrap(False)
+        pentatonic_layout.addWidget(self.pentatonic_hint)
+        self.pentatonic_neck = PentatonicNeckWidget()
+        self.pentatonic_neck.setMinimumHeight(200)
+        pentatonic_layout.addWidget(self.pentatonic_neck, 1)
+        layout.addWidget(pentatonic_group, 2)
+
+        theory_grid_host = QtWidgets.QWidget()
+        theory_grid = QtWidgets.QGridLayout(theory_grid_host)
+        theory_grid.setContentsMargins(0, 0, 0, 0)
+        theory_grid.setHorizontalSpacing(8)
+        theory_grid.setVerticalSpacing(8)
+        theory_grid.setColumnStretch(0, 1)
+        theory_grid.setColumnStretch(1, 1)
+        theory_grid.setRowStretch(0, 1)
+        theory_grid.setRowStretch(1, 1)
 
         nashville_group = QtWidgets.QGroupBox("Nashville Number Chart")
         nashville_layout = QtWidgets.QVBoxLayout(nashville_group)
-        self.nashville_hint = QtWidgets.QLabel("Select a row to update pentatonic view + theory helpers.")
-        self.nashville_hint.setWordWrap(True)
+        nashville_layout.setContentsMargins(8, 8, 8, 8)
+        nashville_layout.setSpacing(6)
+        self.nashville_hint = QtWidgets.QLabel("Select a row to drive highlights and scale context.")
+        self.nashville_hint.setWordWrap(False)
         self.nashville_table = QtWidgets.QTableWidget(len(NASHVILLE_MAJOR_CHART), 8)
         self.nashville_table.setHorizontalHeaderLabels(["Key", "1", "2m", "3m", "4", "5", "6m", "7dim"])
         self.nashville_table.verticalHeader().setVisible(False)
+        self.nashville_table.verticalHeader().setDefaultSectionSize(20)
         self.nashville_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.nashville_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.nashville_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -3605,79 +3983,46 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         nashville_layout.addWidget(self.nashville_hint)
         nashville_layout.addWidget(self.usual_keys_label)
         nashville_layout.addWidget(self.nashville_table, 1)
-        analysis_row.addWidget(nashville_group, 2)
+        theory_grid.addWidget(nashville_group, 0, 0)
 
-        pentatonic_group = QtWidgets.QGroupBox("Scale + CAGED Chart")
-        pentatonic_layout = QtWidgets.QVBoxLayout(pentatonic_group)
-        top_controls = QtWidgets.QHBoxLayout()
-        top_controls.setSpacing(8)
-        scale_label = QtWidgets.QLabel("Scale")
-        scale_font = QtGui.QFont(scale_label.font())
-        scale_font.setBold(True)
-        scale_label.setFont(scale_font)
-        top_controls.addWidget(scale_label)
-        self.scale_type_combo = QtWidgets.QComboBox()
-        self.scale_type_combo.setMinimumHeight(36)
-        for scale_key in ["minor_pentatonic", "major_pentatonic", "minor_blues", "major_scale", "natural_minor", "mixolydian"]:
-            self.scale_type_combo.addItem(SCALE_LIBRARY[scale_key]["label"], scale_key)
-        self.set_combo_by_data(self.scale_type_combo, self.state.get("theoryScale", "minor_pentatonic"))
-        top_controls.addWidget(self.scale_type_combo, 1)
-        shape_label = QtWidgets.QLabel("CAGED Shape")
-        shape_font = QtGui.QFont(shape_label.font())
-        shape_font.setBold(True)
-        shape_label.setFont(shape_font)
-        top_controls.addWidget(shape_label)
-        self.pentatonic_shape_combo = QtWidgets.QComboBox()
-        self.pentatonic_shape_combo.setMinimumHeight(36)
-        for shape_key in ["c", "a", "g", "e", "d"]:
-            self.pentatonic_shape_combo.addItem(CAGED_SHAPES[shape_key]["label"], shape_key)
-        self.set_combo_by_data(self.pentatonic_shape_combo, self.state.get("theoryShape", "g"))
-        top_controls.addWidget(self.pentatonic_shape_combo, 1)
-        pentatonic_layout.addLayout(top_controls)
-
-        self.pentatonic_hint = QtWidgets.QLabel("Shape map for selected key center.")
-        self.pentatonic_hint.setWordWrap(True)
-        pentatonic_layout.addWidget(self.pentatonic_hint)
-        self.pentatonic_neck = PentatonicNeckWidget()
-        pentatonic_layout.addWidget(self.pentatonic_neck, 2)
-
-        self.key_toolkit_text = QtWidgets.QTextEdit()
-        self.key_toolkit_text.setReadOnly(True)
-        self.key_toolkit_text.setMinimumHeight(120)
-        pentatonic_layout.addWidget(self.key_toolkit_text, 1)
-        analysis_row.addWidget(pentatonic_group, 2)
-
-        layout.addLayout(analysis_row, 1)
-
-        playbook_row = QtWidgets.QHBoxLayout()
-        playbook_row.setSpacing(10)
+        circle_group = QtWidgets.QGroupBox("Circle of Fifths")
+        circle_layout = QtWidgets.QVBoxLayout(circle_group)
+        circle_layout.setContentsMargins(8, 8, 8, 8)
+        circle_layout.setSpacing(6)
+        self.circle_of_fifths = CircleOfFifthsWidget()
+        self.circle_hint = QtWidgets.QLabel("Highlights follow the selected Nashville row.")
+        self.circle_hint.setWordWrap(True)
+        circle_layout.addWidget(self.circle_of_fifths, 1)
+        circle_layout.addWidget(self.circle_hint)
+        theory_grid.addWidget(circle_group, 0, 1)
 
         playbook_group = QtWidgets.QGroupBox("Style Playbook")
         playbook_layout = QtWidgets.QVBoxLayout(playbook_group)
+        playbook_layout.setContentsMargins(8, 8, 8, 8)
         self.playbook_preview = QtWidgets.QTextEdit()
         self.playbook_preview.setReadOnly(True)
-        self.playbook_preview.setMinimumHeight(180)
-        playbook_layout.addWidget(self.playbook_preview)
-        playbook_row.addWidget(playbook_group, 1)
+        playbook_layout.addWidget(self.playbook_preview, 1)
+        theory_grid.addWidget(playbook_group, 1, 0)
 
         crazy_group = QtWidgets.QGroupBox("Creative Theory")
         crazy_layout = QtWidgets.QVBoxLayout(crazy_group)
+        crazy_layout.setContentsMargins(8, 8, 8, 8)
+        crazy_layout.setSpacing(8)
         self.crazy_btn = QtWidgets.QPushButton("Lets get Crazy")
-        self.crazy_btn.setMinimumHeight(34)
+        self.crazy_btn.setMinimumHeight(32)
         crazy_layout.addWidget(self.crazy_btn, 0, QtCore.Qt.AlignLeft)
         crazy_content_row = QtWidgets.QHBoxLayout()
         crazy_content_row.setSpacing(8)
         self.crazy_progression_text = QtWidgets.QTextEdit()
         self.crazy_progression_text.setReadOnly(True)
-        self.crazy_progression_text.setMinimumHeight(140)
         self.crazy_scale_text = QtWidgets.QTextEdit()
         self.crazy_scale_text.setReadOnly(True)
-        self.crazy_scale_text.setMinimumHeight(140)
         crazy_content_row.addWidget(self.crazy_progression_text, 1)
         crazy_content_row.addWidget(self.crazy_scale_text, 1)
         crazy_layout.addLayout(crazy_content_row, 1)
-        playbook_row.addWidget(crazy_group, 1)
-        layout.addLayout(playbook_row, 0)
+        theory_grid.addWidget(crazy_group, 1, 1)
+
+        layout.addWidget(theory_grid_host, 3)
 
         self.populate_nashville_table()
         self.nashville_table.itemSelectionChanged.connect(self.on_nashville_selection_changed)
@@ -3685,10 +4030,400 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.scale_type_combo.currentIndexChanged.connect(self.on_scale_type_changed)
         self.crazy_btn.clicked.connect(self.on_lets_get_crazy)
 
+    def create_theory_panel(self, panel_key, title, widget):
+        subwindow = TheoryPanelSubWindow(panel_key)
+        subwindow.setAttribute(QtCore.Qt.WA_DeleteOnClose, False)
+        subwindow.setWindowFlags(
+            QtCore.Qt.SubWindow
+            | QtCore.Qt.CustomizeWindowHint
+            | QtCore.Qt.WindowTitleHint
+            | QtCore.Qt.WindowSystemMenuHint
+            | QtCore.Qt.WindowMinimizeButtonHint
+        )
+        subwindow.setWidget(widget)
+        subwindow.setWindowTitle(title)
+        subwindow.setOption(QtWidgets.QMdiSubWindow.RubberBandMove, True)
+        subwindow.setOption(QtWidgets.QMdiSubWindow.RubberBandResize, True)
+        self.theory_workspace.addSubWindow(subwindow)
+        self.theory_panels[panel_key] = subwindow
+        subwindow.restored_from_minimize.connect(self.on_theory_panel_restored)
+        subwindow.minimized_changed.connect(self.on_theory_panel_minimized_changed)
+        subwindow.geometry_changed.connect(self.on_theory_panel_geometry_changed)
+        snap_timer = QtCore.QTimer(self)
+        snap_timer.setSingleShot(True)
+        snap_timer.timeout.connect(lambda key=panel_key: self.snap_theory_panel_to_zone(key))
+        self._theory_snap_timers[panel_key] = snap_timer
+        subwindow.show()
+
+    def theory_panel_default_slots(self):
+        return {
+            "nashville": {"mode": "quarter", "row": 0, "col": 0},
+            "circle": {"mode": "quarter", "row": 1, "col": 0},
+            "playbook": {"mode": "quarter", "row": 0, "col": 1},
+            "crazy": {"mode": "quarter", "row": 1, "col": 1},
+        }
+
+    def theory_zone_rects(self, rows=None):
+        if not hasattr(self, "theory_workspace"):
+            return {}
+        rows = max(2, int(rows if rows is not None else getattr(self, "theory_grid_rows", 2)))
+        viewport = self.theory_workspace.viewport().rect().adjusted(8, 8, -8, -8)
+        if viewport.width() < 100 or viewport.height() < 100:
+            return {}
+        gap = 8
+        col_w = max(240, (viewport.width() - gap) // 2)
+        if not hasattr(self, "theory_base_row_height"):
+            self.theory_base_row_height = max(150, (max(360, viewport.height()) - gap) // 2)
+        row_h = int(max(120, self.theory_base_row_height))
+        needed_h = rows * row_h + max(0, rows - 1) * gap
+        self.theory_workspace.setMinimumHeight(max(360, needed_h + 16))
+        left = viewport.left()
+        top = viewport.top()
+        full_w = col_w * 2 + gap
+        quarter = {}
+        half = {}
+        for row in range(rows):
+            y = top + row * (row_h + gap)
+            quarter[(row, 0)] = QtCore.QRect(left, y, col_w, row_h)
+            quarter[(row, 1)] = QtCore.QRect(left + col_w + gap, y, col_w, row_h)
+            half[row] = QtCore.QRect(left, y, full_w, row_h)
+        return {
+            "quarter": quarter,
+            "half": half,
+            "meta": {
+                "rows": rows,
+                "gap": gap,
+                "col_w": col_w,
+                "row_h": row_h,
+                "left": left,
+                "top": top,
+                "full_w": full_w,
+            },
+        }
+
+    def theory_panel_rect_for_slot(self, slot, zones):
+        if not slot or not zones:
+            return QtCore.QRect()
+        mode = slot.get("mode", "quarter")
+        row = max(0, int(slot.get("row", 0)))
+        if mode == "half":
+            return zones["half"].get(row, QtCore.QRect())
+        col = 0 if int(slot.get("col", 0)) <= 0 else 1
+        return zones["quarter"].get((row, col), QtCore.QRect())
+
+    def theory_panel_slot_from_geometry(self, panel_rect):
+        zones = self.theory_zone_rects()
+        if not zones:
+            return {"mode": "quarter", "row": 0, "col": 0}
+        meta = zones["meta"]
+        center = panel_rect.center()
+        row_step = max(1, meta["row_h"] + meta["gap"])
+        row = clamp(int(round((center.y() - meta["top"]) / float(row_step))), 0, max(0, meta["rows"] - 1))
+        if panel_rect.width() >= int(meta["full_w"] * 0.74):
+            return {"mode": "half", "row": row}
+        col = 0 if center.x() < (meta["left"] + meta["col_w"]) else 1
+        return {"mode": "quarter", "row": row, "col": col}
+
+    def theory_active_panel_keys(self):
+        keys = []
+        for key, subwindow in self.theory_panels.items():
+            if subwindow.windowState() & QtCore.Qt.WindowMinimized:
+                continue
+            keys.append(key)
+        return keys
+
+    def normalize_theory_slot(self, slot, fallback=None):
+        fallback = fallback or {"mode": "quarter", "row": 0, "col": 0}
+        base_mode = "half" if fallback.get("mode") == "half" else "quarter"
+        base_row = max(0, int(fallback.get("row", 0)))
+        base_col = 0 if int(fallback.get("col", 0)) <= 0 else 1
+        mode = base_mode
+        row = base_row
+        col = base_col
+        if isinstance(slot, dict):
+            mode = "half" if slot.get("mode") == "half" else "quarter"
+            try:
+                row = int(slot.get("row", base_row))
+            except Exception:
+                row = base_row
+            try:
+                col = int(slot.get("col", base_col))
+            except Exception:
+                col = base_col
+        row = max(0, row)
+        if mode == "half":
+            return {"mode": "half", "row": row}
+        return {"mode": "quarter", "row": row, "col": 0 if col <= 0 else 1}
+
+    def theory_slot_cells(self, slot):
+        normalized = self.normalize_theory_slot(slot)
+        row = int(normalized.get("row", 0))
+        if normalized.get("mode") == "half":
+            return [(row, 0), (row, 1)]
+        col = 0 if int(normalized.get("col", 0)) <= 0 else 1
+        return [(row, col)]
+
+    def place_theory_slot(self, slot, occupied_cells):
+        normalized = self.normalize_theory_slot(slot)
+        mode = normalized.get("mode", "quarter")
+        row = int(normalized.get("row", 0))
+        if mode == "half":
+            while (row, 0) in occupied_cells or (row, 1) in occupied_cells:
+                row += 1
+            return {"mode": "half", "row": row}
+
+        preferred_col = 0 if int(normalized.get("col", 0)) <= 0 else 1
+        alt_col = 1 - preferred_col
+        if (row, preferred_col) not in occupied_cells:
+            return {"mode": "quarter", "row": row, "col": preferred_col}
+        if (row, alt_col) not in occupied_cells:
+            return {"mode": "quarter", "row": row, "col": alt_col}
+        while True:
+            row += 1
+            if (row, preferred_col) not in occupied_cells:
+                return {"mode": "quarter", "row": row, "col": preferred_col}
+            if (row, alt_col) not in occupied_cells:
+                return {"mode": "quarter", "row": row, "col": alt_col}
+
+    def resolve_theory_panel_slots(self, lead_key=None, compact_quarters=False):
+        if not hasattr(self, "theory_panels"):
+            return False
+        active_keys = self.theory_active_panel_keys()
+        if not active_keys:
+            self.theory_grid_rows = 2
+            return False
+
+        defaults = self.theory_panel_default_slots()
+        for key in self.theory_panels.keys():
+            fallback = defaults.get(key, {"mode": "quarter", "row": 0, "col": 0})
+            self.theory_panel_slots[key] = self.normalize_theory_slot(self.theory_panel_slots.get(key), fallback)
+
+        ordered = sorted(
+            active_keys,
+            key=lambda key: (
+                int(self.theory_panel_slots.get(key, {}).get("row", 0)),
+                0 if self.theory_panel_slots.get(key, {}).get("mode") == "half" else 1,
+                int(self.theory_panel_slots.get(key, {}).get("col", 0)),
+                key,
+            ),
+        )
+        if lead_key in ordered:
+            ordered.remove(lead_key)
+            ordered.insert(0, lead_key)
+
+        placed = {}
+        occupied_cells = set()
+        for key in ordered:
+            slot = self.place_theory_slot(self.theory_panel_slots.get(key), occupied_cells)
+            placed[key] = slot
+            for cell in self.theory_slot_cells(slot):
+                occupied_cells.add(cell)
+
+        if compact_quarters and ordered and all(placed[key].get("mode") == "quarter" for key in ordered):
+            compacted = {}
+            for idx, key in enumerate(ordered):
+                compacted[key] = {"mode": "quarter", "row": idx // 2, "col": idx % 2}
+            placed = compacted
+
+        changed = False
+        max_row = 1
+        for key, slot in placed.items():
+            previous = self.theory_panel_slots.get(key)
+            if previous != slot:
+                changed = True
+            self.theory_panel_slots[key] = slot
+            max_row = max(max_row, int(slot.get("row", 0)))
+
+        self.theory_grid_rows = max(2, max_row + 1)
+        return changed
+
+    def theory_slot_conflicts(self, panel_key, candidate_slot):
+        target_cells = set(self.theory_slot_cells(candidate_slot))
+        for other_key, subwindow in self.theory_panels.items():
+            if other_key == panel_key:
+                continue
+            if subwindow.windowState() & QtCore.Qt.WindowMinimized:
+                continue
+            other_slot = self.theory_panel_slots.get(other_key, self.theory_panel_default_slots().get(other_key, {"mode": "quarter", "row": 0, "col": 0}))
+            other_cells = set(self.theory_slot_cells(other_slot))
+            if target_cells.intersection(other_cells):
+                return True
+        return False
+
+    def normalize_quarter_layout_if_needed(self):
+        active_keys = self.theory_active_panel_keys()
+        if not active_keys:
+            self.theory_grid_rows = 2
+            return
+        if not all(self.normalize_theory_slot(self.theory_panel_slots.get(key)).get("mode") == "quarter" for key in active_keys):
+            return
+        self.resolve_theory_panel_slots(compact_quarters=True)
+
+    def layout_theory_panels_from_slots(self):
+        zones = self.theory_zone_rects()
+        if not zones:
+            return
+        self._applying_theory_layout = True
+        try:
+            for key, subwindow in self.theory_panels.items():
+                if subwindow.windowState() & QtCore.Qt.WindowMinimized:
+                    continue
+                slot = self.theory_panel_slots.get(key, self.theory_panel_default_slots().get(key, {"mode": "quarter", "row": 0, "col": 0}))
+                rect = self.theory_panel_rect_for_slot(slot, zones)
+                if rect.isNull():
+                    continue
+                subwindow.showNormal()
+                subwindow.setGeometry(rect)
+        finally:
+            self._applying_theory_layout = False
+        self.arrange_minimized_theory_panels()
+
+    def snap_theory_panel_to_zone(self, panel_key):
+        if self._applying_theory_layout:
+            return
+        subwindow = self.theory_panels.get(panel_key)
+        if not subwindow or (subwindow.windowState() & QtCore.Qt.WindowMinimized):
+            return
+        defaults = self.theory_panel_default_slots()
+        candidate = self.normalize_theory_slot(self.theory_panel_slot_from_geometry(subwindow.geometry()), defaults.get(panel_key, {"mode": "quarter", "row": 0, "col": 0}))
+        had_conflict = self.theory_slot_conflicts(panel_key, candidate)
+        if had_conflict:
+            occupied_rows = [int(self.normalize_theory_slot(self.theory_panel_slots.get(key), defaults.get(key)).get("row", 0)) for key in self.theory_active_panel_keys() if key != panel_key]
+            next_row = max([int(getattr(self, "theory_grid_rows", 2)) - 1] + occupied_rows) + 1
+            candidate["row"] = next_row
+        self.theory_panel_slots[panel_key] = candidate
+        self.resolve_theory_panel_slots(lead_key=panel_key, compact_quarters=(not had_conflict))
+        self.layout_theory_panels_from_slots()
+        self.persist_theory_panel_layout()
+
+    def on_theory_panel_geometry_changed(self, panel_key):
+        if self._applying_theory_layout:
+            return
+        subwindow = self.theory_panels.get(panel_key)
+        if not subwindow or (subwindow.windowState() & QtCore.Qt.WindowMinimized):
+            return
+        timer = self._theory_snap_timers.get(panel_key)
+        if timer:
+            timer.start(150)
+
+    def on_theory_panel_minimized_changed(self, _panel_key, is_minimized):
+        if is_minimized:
+            self.arrange_minimized_theory_panels()
+        self.resolve_theory_panel_slots(compact_quarters=True)
+        self.layout_theory_panels_from_slots()
+        self.persist_theory_panel_layout()
+
+    def arrange_minimized_theory_panels(self):
+        if not hasattr(self, "theory_panels") or not hasattr(self, "theory_workspace"):
+            return
+        viewport = self.theory_workspace.viewport().rect().adjusted(6, 6, -6, -6)
+        minimized = [
+            sub for key, sub in sorted(self.theory_panels.items())
+            if sub.windowState() & QtCore.Qt.WindowMinimized
+        ]
+        if not minimized:
+            return
+        tab_w = 170
+        tab_h = 28
+        gap = 6
+        x = viewport.left()
+        y = viewport.top()
+        for sub in minimized:
+            if x + tab_w > viewport.right() and x > viewport.left():
+                x = viewport.left()
+                y += tab_h + gap
+            sub.setGeometry(QtCore.QRect(x, y, tab_w, tab_h))
+            sub.raise_()
+            x += tab_w + gap
+
+    def capture_theory_panel_layout(self):
+        if not hasattr(self, "theory_panels"):
+            return {}
+        layout = {}
+        for key, subwindow in self.theory_panels.items():
+            minimized = bool(subwindow.windowState() & QtCore.Qt.WindowMinimized)
+            rect = subwindow.normalGeometry() if minimized else subwindow.geometry()
+            if rect.isNull():
+                rect = subwindow.geometry()
+            layout[key] = {
+                "x": int(rect.x()),
+                "y": int(rect.y()),
+                "w": int(max(120, rect.width())),
+                "h": int(max(100, rect.height())),
+                "minimized": minimized,
+                "slot": dict(self.theory_panel_slots.get(key, {})),
+            }
+        return layout
+
+    def apply_saved_theory_panel_layout(self):
+        saved = self.state.get("theoryPanelLayout")
+        if not isinstance(saved, dict) or not saved:
+            return False
+        if not hasattr(self, "theory_panels"):
+            return False
+        self.theory_grid_rows = max(2, int(self.state.get("theoryPanelRows", 2) or 2))
+        applied = False
+        defaults = self.theory_panel_default_slots()
+        for key, subwindow in self.theory_panels.items():
+            payload = saved.get(key)
+            if not isinstance(payload, dict):
+                continue
+            slot = payload.get("slot")
+            if isinstance(slot, dict) and slot.get("mode") in {"quarter", "half"}:
+                parsed = self.normalize_theory_slot(slot, defaults.get(key, {"mode": "quarter", "row": 0, "col": 0}))
+                self.theory_panel_slots[key] = parsed
+                applied = True
+            else:
+                try:
+                    x = int(payload.get("x", 0))
+                    y = int(payload.get("y", 0))
+                    w = int(payload.get("w", 300))
+                    h = int(payload.get("h", 220))
+                except Exception:
+                    continue
+                inferred = self.normalize_theory_slot(
+                    self.theory_panel_slot_from_geometry(QtCore.QRect(x, y, w, h)),
+                    defaults.get(key, {"mode": "quarter", "row": 0, "col": 0}),
+                )
+                self.theory_panel_slots[key] = inferred
+                applied = True
+
+        self.resolve_theory_panel_slots(compact_quarters=False)
+        self.layout_theory_panels_from_slots()
+        for key, subwindow in self.theory_panels.items():
+            payload = saved.get(key)
+            if isinstance(payload, dict) and bool(payload.get("minimized", False)):
+                subwindow.showMinimized()
+        self.resolve_theory_panel_slots(compact_quarters=True)
+        self.layout_theory_panels_from_slots()
+        self.arrange_minimized_theory_panels()
+        return applied
+
+    def persist_theory_panel_layout(self):
+        self.state["theoryPanelRows"] = int(max(2, getattr(self, "theory_grid_rows", 2)))
+        self.state["theoryPanelLayout"] = self.capture_theory_panel_layout()
+        self.persist_state(silent=True)
+
+    def reset_theory_panel_layout(self, panel_key=None):
+        if not hasattr(self, "theory_panels"):
+            return
+        defaults = self.theory_panel_default_slots()
+        if panel_key is None:
+            self.theory_grid_rows = 2
+            self.theory_panel_slots = dict(defaults)
+        else:
+            self.theory_panel_slots[panel_key] = dict(defaults.get(panel_key, {"mode": "quarter", "row": 0, "col": 0}))
+        self.resolve_theory_panel_slots(lead_key=panel_key, compact_quarters=True)
+        self.layout_theory_panels_from_slots()
+        self.persist_theory_panel_layout()
+
+    def on_theory_panel_restored(self, panel_key):
+        QtCore.QTimer.singleShot(0, lambda key=panel_key: self.snap_theory_panel_to_zone(key))
+
     def build_feedback_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.feedback_tab)
+        layout = QtWidgets.QVBoxLayout(self.feedback_tab_content)
         layout.setSpacing(10)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         top_row = QtWidgets.QHBoxLayout()
         top_row.setSpacing(10)
@@ -3780,6 +4515,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         group_layout = QtWidgets.QVBoxLayout(group)
         text = QtWidgets.QTextEdit()
         text.setReadOnly(True)
+        text.setMinimumHeight(78)
+        text.setMaximumHeight(160)
         text.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         group_layout.addWidget(text)
         group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -3795,7 +4532,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
     def build_pedal_settings_card(self, pedal_id, settings):
         frame = QtWidgets.QFrame()
         frame.setObjectName("pedalSettingsCard")
-        frame.setMinimumHeight(220)
+        frame.setMinimumHeight(180)
         frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         content = QtWidgets.QVBoxLayout(frame)
         content.setContentsMargins(10, 10, 10, 10)
@@ -3973,8 +4710,6 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.pentatonic_hint.setText(
             f"{self.pentatonic_neck.summary_text()}  |  Formula: {scale.get('formula', '')}"
         )
-        if hasattr(self, "key_toolkit_text"):
-            self.key_toolkit_text.setPlainText("\n".join(self.build_key_toolkit_lines(active_key, scale_key)))
 
     def add_control_column(self, layout, label_text, widget):
         wrapper_widget = QtWidgets.QWidget()
@@ -4002,6 +4737,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         return text
 
     def bind_builder_events(self):
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         self.genre_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.guitar_type_electric.toggled.connect(self.on_controls_changed)
         self.guitar_type_acoustic.toggled.connect(self.on_controls_changed)
@@ -4030,6 +4766,18 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.board_canvas.pedalDoubleClicked.connect(self.on_canvas_pedal_double_clicked)
         self.board_canvas.pedalRemoveRequested.connect(self.on_canvas_pedal_removed)
         self.board_canvas.pedalDisconnectRequested.connect(self.on_canvas_disconnect_requested)
+
+    def on_tab_changed(self, _index):
+        if not hasattr(self, "tabs") or not hasattr(self, "theory_tab"):
+            return
+        if self.tabs.currentWidget() is self.theory_tab and hasattr(self, "theory_panels"):
+            if not getattr(self, "_theory_panels_initialized", False):
+                if not self.apply_saved_theory_panel_layout():
+                    self.reset_theory_panel_layout()
+                self.arrange_minimized_theory_panels()
+                self._theory_panels_initialized = True
+            else:
+                self.arrange_minimized_theory_panels()
 
     def populate_controls(self):
         self._loading_ui = True
@@ -4102,15 +4850,16 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             metrics.horizontalAdvance("2 knob electric"),
             metrics.horizontalAdvance("4 knob electric"),
         ) + 34
-        stack_width = clamp(max(acoustic_text_width, electric_text_width, 280), 280, 420)
-        self.guitar_controls_stack.setFixedWidth(stack_width)
-        field_width = clamp(stack_width - 18, 260, 400)
+        stack_width = clamp(max(acoustic_text_width, electric_text_width, 220), 220, 360)
+        self.guitar_controls_stack.setMinimumWidth(stack_width)
+        self.guitar_controls_stack.setMaximumWidth(stack_width + 120)
+        field_width = clamp(stack_width - 18, 200, 420)
         if hasattr(self, "acoustic_controls_text"):
             self.acoustic_controls_text.setMinimumWidth(field_width)
-            self.acoustic_controls_text.setMaximumWidth(field_width)
+            self.acoustic_controls_text.setMaximumWidth(16777215)
         h_electric = self.profile_electric_2.sizeHint().height() + self.profile_electric_4.sizeHint().height() + 10
         h_acoustic = self.acoustic_controls_text.sizeHint().height() + 10 if hasattr(self, "acoustic_controls_text") else h_electric
-        self.guitar_controls_stack.setFixedHeight(max(h_electric, h_acoustic, 48))
+        self.guitar_controls_stack.setMinimumHeight(max(h_electric, h_acoustic, 48))
 
     def selected_profile_key(self):
         if self.guitar_type_acoustic.isChecked():
@@ -4297,6 +5046,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def choose_slot(self, candidates, used_rects):
         for candidate in candidates:
+            if not self.board_canvas.can_place_pedal_at(candidate):
+                continue
             candidate_rect = QtCore.QRect(candidate, self.board_canvas.PEDAL_SIZE)
             collision = False
             for used in used_rects:
@@ -4306,6 +5057,60 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             if not collision:
                 return candidate
         return None
+
+    def centered_cleanup_slots(self, count, max_per_row=4):
+        if count <= 0:
+            return []
+        pedal_w = self.board_canvas.PEDAL_SIZE.width()
+        pedal_h = self.board_canvas.PEDAL_SIZE.height()
+        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
+        lane_left, lane_right = self.board_canvas.pedal_lane_bounds()
+
+        area_left = clamp(lane_left + 6, min_x, max_x)
+        area_right = clamp(lane_right - pedal_w - 6, area_left, max_x)
+        if area_right <= area_left:
+            area_left, area_right = min_x, max_x
+        available_h = max(1, max_y - min_y + pedal_h)
+
+        def columns_for_width(width_px):
+            cols_cap = max(1, min(max_per_row, count))
+            gap_x_seed = 22
+            return max(1, min(cols_cap, int((width_px + gap_x_seed) // (pedal_w + gap_x_seed))))
+
+        available_w = max(1, area_right - area_left + pedal_w)
+        cols = columns_for_width(available_w)
+        rows = max(1, math.ceil(count / cols))
+
+        # If the center lane cannot fit all pedals by height, widen to full board.
+        if rows * pedal_h > available_h:
+            area_left, area_right = min_x, max_x
+            available_w = max(1, area_right - area_left + pedal_w)
+            cols = columns_for_width(available_w)
+            rows = max(1, math.ceil(count / cols))
+
+        if rows > 1:
+            gap_y = max(0, min(48, (available_h - rows * pedal_h) // (rows - 1)))
+        else:
+            gap_y = 0
+        total_h = rows * pedal_h + max(0, rows - 1) * gap_y
+        start_y = clamp(int(round(((min_y + max_y) / 2.0) - (total_h / 2.0))), min_y, max_y)
+
+        slots = []
+        remaining = count
+        for row in range(rows):
+            row_cols = min(cols, remaining)
+            if row_cols <= 1:
+                row_gap_x = 0
+            else:
+                row_gap_x = max(14, (available_w - row_cols * pedal_w) // (row_cols - 1))
+            row_w = row_cols * pedal_w + max(0, row_cols - 1) * row_gap_x
+            row_start_x = clamp(area_left + max(0, (available_w - row_w) // 2), area_left, area_right)
+            y = start_y + row * (pedal_h + gap_y)
+            for col in range(row_cols):
+                x = row_start_x + (row_cols - 1 - col) * (pedal_w + row_gap_x)
+                slots.append(QtCore.QPoint(x, y))
+            remaining -= row_cols
+        return slots
 
     def default_canvas_position_for(self, pedal_id):
         chain = list(self.state["chain"])
@@ -4349,21 +5154,29 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         chain = sanitize_chain(self.state["chain"])
         self.state["chain"] = chain
         positions = self.state.setdefault("canvasPositions", {})
+        used_rects = []
+        fallback_slots = self.collect_layout_slots(max(len(chain) * 6, 32), right_to_left=True)
         for pedal_id in chain:
             if pedal_id == focus_pedal and focus_pos is not None:
                 clamped = self.board_canvas.clamp_pedal_position(focus_pos)
-                positions[pedal_id] = [clamped.x(), clamped.y()]
+                point = QtCore.QPoint(clamped.x(), clamped.y())
             elif pedal_id not in positions:
                 default_pos = self.default_canvas_position_for(pedal_id)
-                positions[pedal_id] = [default_pos.x(), default_pos.y()]
+                point = QtCore.QPoint(default_pos.x(), default_pos.y())
             else:
                 raw = positions[pedal_id]
                 if not isinstance(raw, (list, tuple)) or len(raw) != 2:
                     default_pos = self.default_canvas_position_for(pedal_id)
-                    positions[pedal_id] = [default_pos.x(), default_pos.y()]
+                    point = QtCore.QPoint(default_pos.x(), default_pos.y())
                 else:
                     clamped = self.board_canvas.clamp_pedal_position(QtCore.QPoint(int(raw[0]), int(raw[1])))
-                    positions[pedal_id] = [clamped.x(), clamped.y()]
+                    point = QtCore.QPoint(clamped.x(), clamped.y())
+
+            slot = self.choose_slot([point] + fallback_slots, used_rects)
+            if slot is None:
+                slot = self.board_canvas.find_nearest_open_pedal_position(point)
+            positions[pedal_id] = [slot.x(), slot.y()]
+            used_rects.append(QtCore.QRect(slot, self.board_canvas.PEDAL_SIZE))
         for pedal_id in list(positions.keys()):
             if pedal_id not in chain:
                 positions.pop(pedal_id, None)
@@ -4549,64 +5362,39 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         chain = sanitize_chain(self.state["chain"])
         if not chain:
             return
-        connected = self.compute_connected_chain()
-        connected_ids = [pedal_id for pedal_id in chain if pedal_id in connected]
-        staged_ids = [pedal_id for pedal_id in chain if pedal_id not in connected]
+        centered_slots = self.centered_cleanup_slots(len(chain), max_per_row=4)
+        fallback_slots = self.collect_layout_slots(max(len(chain) * 6, 32), right_to_left=True)
+        ordered_candidates = []
+        seen = set()
 
-        min_x, max_x, min_y, max_y = self.board_canvas.pedal_position_bounds()
-        signal_slots = self.collect_horizontal_chain_slots(
-            max(len(connected_ids) * 3, 16),
-            x_range=(min_x, max_x),
-            y_range=(min_y + 90, max_y),
-        )
-        if len(signal_slots) < len(connected_ids):
-            signal_slots = self.collect_horizontal_chain_slots(
-                max(len(chain) * 3, 18),
-                x_range=(min_x, max_x),
-                y_range=(min_y, max_y),
-            )
-        if len(signal_slots) < len(connected_ids):
-            signal_slots.extend(
-                self.collect_layout_slots(
-                    max(len(chain) * 3, 18),
-                    x_range=(min_x, max_x),
-                    y_range=(min_y, max_y),
-                    right_to_left=True,
-                )
-            )
+        def append_slots(slots):
+            for slot in slots:
+                if not self.board_canvas.can_place_pedal_at(slot):
+                    continue
+                key = (slot.x(), slot.y())
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered_candidates.append(slot)
 
-        parking_y1 = min(max_y, min_y + self.board_canvas.PEDAL_SIZE.height() + 40)
-        parking_slots = self.collect_layout_slots(
-            max(len(staged_ids) * 4, 12),
-            y_range=(min_y, parking_y1),
-            right_to_left=False,
-        )
-        if len(parking_slots) < len(staged_ids):
-            right_column_x0 = max(min_x, max_x - self.board_canvas.PEDAL_SIZE.width() - 6)
-            parking_slots.extend(
-                self.collect_layout_slots(
-                    max(len(staged_ids) * 4, 12),
-                    x_range=(right_column_x0, max_x),
-                    y_range=(min_y, max_y),
-                    right_to_left=False,
-                )
-            )
+        append_slots(centered_slots)
+        if ordered_candidates:
+            last_y = ordered_candidates[-1].y()
+            append_slots([slot for slot in fallback_slots if slot.y() >= last_y])
+            append_slots([slot for slot in fallback_slots if slot.y() < last_y])
+        else:
+            append_slots(fallback_slots)
 
-        fallback_slots = self.collect_layout_slots(max(len(chain) * 4, 24), right_to_left=True)
         positions = self.state.setdefault("canvasPositions", {})
         used_rects = []
 
-        for pedal_id in connected_ids:
-            slot = self.choose_slot(signal_slots, used_rects)
+        min_x, _max_x, min_y, _max_y = self.board_canvas.pedal_position_bounds()
+        for pedal_id in chain:
+            slot = self.choose_slot(ordered_candidates, used_rects)
             if slot is None:
-                slot = self.choose_slot(fallback_slots, used_rects) or self.board_canvas.clamp_pedal_position(QtCore.QPoint(min_x, min_y))
-            positions[pedal_id] = [slot.x(), slot.y()]
-            used_rects.append(QtCore.QRect(slot, self.board_canvas.PEDAL_SIZE))
-
-        for pedal_id in staged_ids:
-            slot = self.choose_slot(parking_slots, used_rects)
-            if slot is None:
-                slot = self.choose_slot(fallback_slots, used_rects) or self.board_canvas.clamp_pedal_position(QtCore.QPoint(max_x, min_y))
+                slot = self.board_canvas.find_nearest_open_pedal_position(QtCore.QPoint(min_x, min_y))
+            else:
+                ordered_candidates = [item for item in ordered_candidates if item.x() != slot.x() or item.y() != slot.y()]
             positions[pedal_id] = [slot.x(), slot.y()]
             used_rects.append(QtCore.QRect(slot, self.board_canvas.PEDAL_SIZE))
 
@@ -4739,7 +5527,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def render_builder_preview(self, recommendation):
         guitar = recommendation.get("guitar")
-        if guitar:
+        if guitar and hasattr(self, "guitar_preview"):
             rows = [f"{guitar['label']}"]
             for key, value in guitar["settings"].items():
                 if key == "note":
@@ -4748,7 +5536,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             if guitar.get("volumeAdvice"):
                 rows.append(f"- Volume: {guitar['volumeAdvice']}")
             self.guitar_preview.setPlainText("\n".join(rows))
-        else:
+        elif hasattr(self, "guitar_preview"):
             self.guitar_preview.setPlainText("Select a guitar profile.")
 
         amp = recommendation["amp"]
@@ -4761,7 +5549,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             f"Presence: {quick_knob(amp['presence'])}",
             f"Master: {quick_knob(amp['master'])}",
         ]
-        self.amp_preview.setPlainText("\n".join(amp_lines))
+        if hasattr(self, "amp_preview"):
+            self.amp_preview.setPlainText("\n".join(amp_lines))
 
         self.render_theory_playbook()
 
@@ -5459,7 +6248,40 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
                         clean_connections.append([src, dst])
             self.state["canvasConnections"] = clean_connections
 
+        theory_panel_layout = payload.get("theoryPanelLayout")
+        if isinstance(theory_panel_layout, dict):
+            clean_layout = {}
+            for key in ["nashville", "circle", "playbook", "crazy"]:
+                entry = theory_panel_layout.get(key)
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    cleaned_entry = {
+                        "x": int(entry.get("x", 0)),
+                        "y": int(entry.get("y", 0)),
+                        "w": int(entry.get("w", 300)),
+                        "h": int(entry.get("h", 220)),
+                        "minimized": bool(entry.get("minimized", False)),
+                    }
+                    slot = entry.get("slot")
+                    if isinstance(slot, dict) and slot.get("mode") in {"quarter", "half"}:
+                        parsed_slot = {"mode": slot.get("mode", "quarter"), "row": int(slot.get("row", 0))}
+                        if parsed_slot["mode"] == "quarter":
+                            parsed_slot["col"] = 0 if int(slot.get("col", 0)) <= 0 else 1
+                        cleaned_entry["slot"] = parsed_slot
+                    clean_layout[key] = cleaned_entry
+                except Exception:
+                    continue
+            self.state["theoryPanelLayout"] = clean_layout
+
+        theory_panel_rows = payload.get("theoryPanelRows")
+        if isinstance(theory_panel_rows, (int, float)):
+            self.state["theoryPanelRows"] = max(2, int(theory_panel_rows))
+
     def persist_state(self, silent=False):
+        if hasattr(self, "theory_panels"):
+            self.state["theoryPanelRows"] = int(max(2, getattr(self, "theory_grid_rows", self.state.get("theoryPanelRows", 2))))
+            self.state["theoryPanelLayout"] = self.capture_theory_panel_layout()
         payload = {
             "genre": self.state["genre"],
             "guitarType": self.state["guitarType"],
@@ -5474,6 +6296,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "chain": self.state["chain"],
             "canvasPositions": self.state.get("canvasPositions", {}),
             "canvasConnections": self.state.get("canvasConnections", []),
+            "theoryPanelLayout": self.state.get("theoryPanelLayout", {}),
+            "theoryPanelRows": int(max(2, self.state.get("theoryPanelRows", 2))),
         }
         STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         if not silent:
