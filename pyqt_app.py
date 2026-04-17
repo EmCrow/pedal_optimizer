@@ -6,15 +6,19 @@ Branch: py_app
 
 import copy
 import hashlib
+import heapq
 import itertools
 import json
 import math
+import os
+import random
 import re
 import socket
 import sys
 import urllib.error
 import urllib.request
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -42,20 +46,205 @@ PEDAL_LIBRARY = {
     "rc30": "BOSS RC-30",
 }
 
+PEDAL_REFERENCE = {
+    "cs3": {
+        "name": "BOSS CS-3 Compression Sustainer",
+        "summary": "Smooths level spikes and adds sustain so picking feels even and articulate.",
+        "controls": ["Level", "Tone", "Attack", "Sustain"],
+        "configure": [
+            "Start with sustain near noon, then raise only until notes bloom without pumping.",
+            "Use attack around noon for balanced transient response.",
+            "Trim tone if top-end gets too sharp after compression.",
+        ],
+        "possibilities": [
+            "Country snap with fast attack and moderate sustain.",
+            "Lead sustain before gain pedals.",
+            "Clean rhythm leveling for loop layers.",
+        ],
+        "placement": [
+            "Usually first or near first, before overdrive/distortion.",
+            "After gain is possible, but tends to raise hiss and flatten dynamics.",
+        ],
+    },
+    "sd1": {
+        "name": "BOSS SD-1 Super OverDrive",
+        "summary": "Asymmetrical-clipping overdrive that tightens lows and emphasizes musical mids.",
+        "controls": ["Drive", "Tone", "Level"],
+        "configure": [
+            "For boost use: Drive low, Level high, Tone just above noon.",
+            "For standalone crunch: Drive to noon-ish and Level near unity.",
+            "Reduce Tone slightly with bright pickups or bright amps.",
+        ],
+        "possibilities": [
+            "Classic mid-push rhythm tone.",
+            "Tight front-end boost into DS-1/high-gain amps.",
+            "Low-gain always-on edge-of-breakup texture.",
+        ],
+        "placement": [
+            "Commonly before DS-1 or amp distortion as a tightening boost.",
+            "Can follow BD-2 when you want extra focus and sustain.",
+        ],
+    },
+    "bd2": {
+        "name": "BOSS BD-2 Blues Driver",
+        "summary": "Touch-sensitive overdrive with wide gain range from mild grit to aggressive breakup.",
+        "controls": ["Gain", "Tone", "Level"],
+        "configure": [
+            "Start with Gain between 10 and 1 o'clock for dynamic breakup.",
+            "Use Tone near noon and adjust for pickup brightness.",
+            "Set Level to match or slightly lift solo volume.",
+        ],
+        "possibilities": [
+            "Always-on tube-like feel.",
+            "Stack with SD-1 for thicker lead voice.",
+            "Blues and classic-rock core overdrive.",
+        ],
+        "placement": [
+            "Usually before modulation/time effects.",
+            "Relative position vs SD-1 changes whether tone is smoother or tighter.",
+        ],
+    },
+    "ds1": {
+        "name": "BOSS DS-1 Distortion",
+        "summary": "Hard-edged distortion with strong attack and long sustain for heavier rhythm/lead tones.",
+        "controls": ["Dist", "Tone", "Level"],
+        "configure": [
+            "Set Dist for required saturation first, then tame highs with Tone.",
+            "For tighter stacks, run SD-1 before DS-1 with low SD-1 drive.",
+            "Keep Level high enough to cut in mix without overloading later stages.",
+        ],
+        "possibilities": [
+            "Primary distortion for rock/metal/grunge.",
+            "Lead boost stage when stacked with SD-1/BD-2.",
+            "Aggressive rhythm with pre-EQ tightening.",
+        ],
+        "placement": [
+            "Typically after compressor and before modulation/delay.",
+            "Before SD-1 can soften attack and add focused mids from SD-1 output.",
+        ],
+    },
+    "ge7": {
+        "name": "BOSS GE-7 Equalizer",
+        "summary": "Seven-band EQ plus level slider for precision tone contour and clean boost/cut.",
+        "controls": ["100, 200, 400, 800, 1.6k, 3.2k, 6.4k sliders", "Level slider"],
+        "configure": [
+            "Cut 100/200 Hz to tighten boomy rigs.",
+            "Boost 800 Hz-1.6 kHz for mix cut and lead focus.",
+            "Use Level slider for clean pre/post gain boost.",
+        ],
+        "possibilities": [
+            "Pre-drive sculpt to change how distortion clips.",
+            "Post-drive polish for final mix contour.",
+            "Feedback/problem-frequency control for acoustic setups.",
+        ],
+        "placement": [
+            "Before gain for feel/clip-shape changes.",
+            "After gain for final tonal balancing.",
+            "When paired with 10-band, split stages pre/post for best clarity.",
+        ],
+    },
+    "eq10": {
+        "name": "10-Band EQ",
+        "summary": "High-resolution frequency shaping with dedicated output/gain control for advanced contouring.",
+        "controls": ["31.25 to 16k sliders", "Output", "Gain"],
+        "configure": [
+            "Start with subtle moves (1-3 dB equivalent) and refine by ear.",
+            "Use output/gain controls carefully to avoid added noise.",
+            "Trim extreme highs/lows first, then shape mids for articulation.",
+        ],
+        "possibilities": [
+            "Master post-drive tonal sculpting.",
+            "Pre-drive voicing to influence saturation character.",
+            "Genre switching via saved curve ideas (scooped, mid-forward, bright-clean).",
+        ],
+        "placement": [
+            "Commonly post-drive for final polish.",
+            "Can run pre-drive if you want deliberate clip-profile changes.",
+        ],
+    },
+    "ch1": {
+        "name": "BOSS CH-1 Super Chorus",
+        "summary": "Shimmering chorus for width and movement with controllable EQ focus.",
+        "controls": ["Effect Level", "EQ", "Rate", "Depth"],
+        "configure": [
+            "Set depth/rate lower for subtle widening, higher for obvious swirl.",
+            "Use EQ to keep chorus from getting too dark or too brittle.",
+            "Balance Effect Level so dry attack remains clear.",
+        ],
+        "possibilities": [
+            "Wide pop cleans and ambient rhythm textures.",
+            "Post-gain lead thickening.",
+            "Stereo spread (when used in stereo rigs).",
+        ],
+        "placement": [
+            "Most often after gain and before delay/looper.",
+            "Before DD-3 usually yields cleaner, more musical repeats.",
+        ],
+    },
+    "dd3": {
+        "name": "BOSS DD-3 Digital Delay",
+        "summary": "Clear digital repeats from slapback to long rhythmic echoes.",
+        "controls": ["E.Level", "F.Back", "D.Time", "Mode"],
+        "configure": [
+            "Set D.Time and mode first for musical subdivision/space.",
+            "Use Feedback modestly unless ambient wash is desired.",
+            "Blend E.Level so repeats support rather than mask picking.",
+        ],
+        "possibilities": [
+            "Country slapback and classic rock echoes.",
+            "Rhythmic dotted-note textures in pop/ambient contexts.",
+            "Pre-looper repeats to print rhythmic movement into loops.",
+        ],
+        "placement": [
+            "Usually near end of chain, after gain/modulation.",
+            "Before RC-30 if you want repeats baked into loop recordings.",
+        ],
+    },
+    "rc30": {
+        "name": "BOSS RC-30 Loop Station",
+        "summary": "Dual-track stereo looper for layered performance, practice, writing, and arrangement.",
+        "controls": ["Track 1 level", "Track 2 level", "Rhythm level", "Rhythm type", "Quantize", "Phrase memory"],
+        "configure": [
+            "Set track levels so overdubs stay balanced over time.",
+            "Use quantize/count-in when tight rhythmic loops matter.",
+            "Match rhythm level to context; too high can mask guitar dynamics.",
+            "Keep loop output below clipping and leave headroom for live playing.",
+        ],
+        "possibilities": [
+            "Dual-part arrangements (rhythm + lead layers).",
+            "Verse/chorus style loop building with separate tracks.",
+            "Practice engine for timing, improvisation, and harmony.",
+            "Live solo performance with progressive overdubs.",
+        ],
+        "placement": [
+            "Best at end of chain when you want loops to capture final tone.",
+            "Place earlier only when intentionally processing loop playback downstream.",
+        ],
+        "advanced": [
+            "Track architecture: Track 1 and Track 2 can be balanced independently.",
+            "Rhythm engine: choose rhythm type and level to create timing reference without DAW.",
+            "Quantize behavior: improves loop seam accuracy for tighter starts/ends.",
+            "Phrase memory workflow: save and recall loop ideas for practice/songwriting.",
+            "Input planning: guitar/mic/aux paths can be gain-staged differently before recording.",
+            "Live reliability: assign predictable record/overdub/playback habits and keep output conservative.",
+        ],
+    },
+}
+
 BANK_ORDER = ["cs3", "sd1", "bd2", "ds1", "ge7", "eq10", "ch1", "dd3", "rc30"]
-DEFAULT_CHAIN = ["sd1", "ds1", "ge7", "eq10", "rc30"]
+DEFAULT_CHAIN = ["ge7", "sd1", "ds1", "eq10", "rc30"]
 
 GENRE_PRESETS = {
     "metal": {
         "label": "Metal",
-        "optimized_chain": ["cs3", "sd1", "ds1", "ge7", "eq10", "dd3", "rc30"],
+        "optimized_chain": ["cs3", "ge7", "sd1", "ds1", "eq10", "dd3", "rc30"],
         "amp": {"gain": 70, "bass": 58, "mid": 40, "treble": 63, "presence": 62, "master": 56},
         "pedals": {
             "cs3": {"level": 62, "tone": 46, "attack": 64, "sustain": 58},
             "sd1": {"drive": 16, "tone": 61, "level": 82},
             "bd2": {"gain": 24, "tone": 52, "level": 54},
             "ds1": {"dist": 73, "tone": 57, "level": 58},
-            "ge7": {"mode": "Post-drive shape", "level": 2, "bands": {"100": -4, "200": -2, "400": 0, "800": 2, "1.6k": 1, "3.2k": 3, "6.4k": 2}},
+            "ge7": {"mode": "Pre-drive tighten", "level": 2, "bands": {"100": -4, "200": -2, "400": 0, "800": 2, "1.6k": 1, "3.2k": 3, "6.4k": 2}},
             "eq10": {"mode": "Post-drive sculpt", "volume": 4, "gain": 2, "bands": {"31.25": -4, "62.5": -2, "125": 3, "250": 1, "500": -3, "1k": -1, "2k": 3, "4k": 4, "8k": 1, "16k": -2}},
             "ch1": {"effectLevel": 24, "eq": 55, "rate": 24, "depth": 28},
             "dd3": {"eLevel": 34, "fBack": 22, "dTime": 36, "mode": "320 ms"},
@@ -63,19 +252,19 @@ GENRE_PRESETS = {
         },
         "notes": [
             "Use SD-1 as a front boost to tighten palm-muted riffs.",
-            "Stack GE-7 or 10-band EQ after distortion for modern cut and control.",
+            "Split EQ staging works best here: GE-7 and 10-band should be split pre/post gain for final contour.",
         ],
     },
     "rock": {
         "label": "Rock",
-        "optimized_chain": ["cs3", "sd1", "bd2", "ds1", "ge7", "eq10", "dd3", "rc30"],
+        "optimized_chain": ["cs3", "ge7", "bd2", "sd1", "ds1", "ch1", "dd3", "rc30"],
         "amp": {"gain": 62, "bass": 55, "mid": 57, "treble": 58, "presence": 56, "master": 60},
         "pedals": {
             "cs3": {"level": 58, "tone": 49, "attack": 54, "sustain": 49},
             "sd1": {"drive": 30, "tone": 55, "level": 66},
             "bd2": {"gain": 42, "tone": 54, "level": 61},
             "ds1": {"dist": 50, "tone": 57, "level": 59},
-            "ge7": {"mode": "Post-drive shape", "level": 1, "bands": {"100": -2, "200": 0, "400": 1, "800": 2, "1.6k": 2, "3.2k": 1, "6.4k": 0}},
+            "ge7": {"mode": "Pre-drive focus", "level": 1, "bands": {"100": -2, "200": 0, "400": 1, "800": 2, "1.6k": 2, "3.2k": 1, "6.4k": 0}},
             "eq10": {"mode": "Post-drive sculpt", "volume": 2, "gain": 1, "bands": {"31.25": -3, "62.5": -1, "125": 1, "250": 2, "500": 2, "1k": 2, "2k": 1, "4k": 1, "8k": 0, "16k": -1}},
             "ch1": {"effectLevel": 33, "eq": 54, "rate": 36, "depth": 44},
             "dd3": {"eLevel": 36, "fBack": 28, "dTime": 42, "mode": "400 ms"},
@@ -88,7 +277,7 @@ GENRE_PRESETS = {
     },
     "classic-rock": {
         "label": "Classic Rock",
-        "optimized_chain": ["cs3", "bd2", "sd1", "ge7", "dd3", "rc30", "ch1"],
+        "optimized_chain": ["cs3", "ge7", "bd2", "sd1", "ch1", "dd3", "rc30"],
         "amp": {"gain": 55, "bass": 56, "mid": 60, "treble": 55, "presence": 54, "master": 62},
         "pedals": {
             "cs3": {"level": 56, "tone": 48, "attack": 50, "sustain": 47},
@@ -108,14 +297,14 @@ GENRE_PRESETS = {
     },
     "pop": {
         "label": "Pop",
-        "optimized_chain": ["cs3", "sd1", "ch1", "ge7", "dd3", "rc30"],
+        "optimized_chain": ["cs3", "ge7", "sd1", "ch1", "dd3", "rc30"],
         "amp": {"gain": 42, "bass": 50, "mid": 52, "treble": 63, "presence": 60, "master": 64},
         "pedals": {
             "cs3": {"level": 61, "tone": 54, "attack": 52, "sustain": 42},
             "sd1": {"drive": 16, "tone": 57, "level": 60},
             "bd2": {"gain": 28, "tone": 56, "level": 56},
             "ds1": {"dist": 30, "tone": 60, "level": 50},
-            "ge7": {"mode": "Post-drive shape", "level": 1, "bands": {"100": -4, "200": -2, "400": 0, "800": 1, "1.6k": 2, "3.2k": 2, "6.4k": 1}},
+            "ge7": {"mode": "Pre-drive clean shape", "level": 1, "bands": {"100": -4, "200": -2, "400": 0, "800": 1, "1.6k": 2, "3.2k": 2, "6.4k": 1}},
             "eq10": {"mode": "Post-drive sculpt", "volume": 2, "gain": 0, "bands": {"31.25": -6, "62.5": -3, "125": -1, "250": 0, "500": 1, "1k": 1, "2k": 2, "4k": 3, "8k": 2, "16k": 0}},
             "ch1": {"effectLevel": 46, "eq": 57, "rate": 42, "depth": 52},
             "dd3": {"eLevel": 40, "fBack": 30, "dTime": 48, "mode": "450 ms"},
@@ -128,14 +317,14 @@ GENRE_PRESETS = {
     },
     "country": {
         "label": "Country",
-        "optimized_chain": ["cs3", "sd1", "ch1", "ge7", "dd3", "rc30"],
+        "optimized_chain": ["cs3", "ge7", "sd1", "ch1", "dd3", "rc30"],
         "amp": {"gain": 36, "bass": 48, "mid": 54, "treble": 66, "presence": 65, "master": 65},
         "pedals": {
             "cs3": {"level": 63, "tone": 57, "attack": 58, "sustain": 44},
             "sd1": {"drive": 14, "tone": 61, "level": 58},
             "bd2": {"gain": 22, "tone": 57, "level": 55},
             "ds1": {"dist": 20, "tone": 56, "level": 47},
-            "ge7": {"mode": "Post-drive shape", "level": 2, "bands": {"100": -5, "200": -3, "400": -1, "800": 1, "1.6k": 2, "3.2k": 3, "6.4k": 1}},
+            "ge7": {"mode": "Pre-drive twang focus", "level": 2, "bands": {"100": -5, "200": -3, "400": -1, "800": 1, "1.6k": 2, "3.2k": 3, "6.4k": 1}},
             "eq10": {"mode": "Post-drive sculpt", "volume": 1, "gain": 0, "bands": {"31.25": -8, "62.5": -5, "125": -2, "250": -1, "500": 1, "1k": 2, "2k": 3, "4k": 2, "8k": 1, "16k": -1}},
             "ch1": {"effectLevel": 34, "eq": 56, "rate": 35, "depth": 40},
             "dd3": {"eLevel": 28, "fBack": 18, "dTime": 34, "mode": "220 ms"},
@@ -168,7 +357,7 @@ GENRE_PRESETS = {
     },
     "blues": {
         "label": "Blues",
-        "optimized_chain": ["cs3", "bd2", "sd1", "ge7", "dd3", "rc30"],
+        "optimized_chain": ["cs3", "ge7", "bd2", "sd1", "dd3", "rc30"],
         "amp": {"gain": 49, "bass": 55, "mid": 62, "treble": 53, "presence": 50, "master": 61},
         "pedals": {
             "cs3": {"level": 57, "tone": 47, "attack": 49, "sustain": 52},
@@ -310,7 +499,7 @@ AUTO_AMP_BY_GENRE = {
 
 GUITAR_PROFILES = {
     "taylor_acoustic": {
-        "label": "Taylor Acoustic (ES2 Bass/Treble)",
+        "label": "Acoustic",
         "type": "acoustic",
         "controls": "bass_treble",
         "volume_advice": "Set guitar volume by ear just below feedback threshold.",
@@ -326,7 +515,7 @@ GUITAR_PROFILES = {
         },
     },
     "electric_2_knob_toggle": {
-        "label": "Electric 2 Knob + Toggle (Master Vol/Tone)",
+        "label": "2 knob electric",
         "type": "electric",
         "controls": "master_volume_tone_toggle",
         "note": "2-knob layout keeps pickup switching fast and predictable.",
@@ -341,7 +530,7 @@ GUITAR_PROFILES = {
         },
     },
     "electric_4_knob_toggle": {
-        "label": "Electric 4 Knob + Toggle (2V/2T)",
+        "label": "4 knob electric",
         "type": "electric",
         "controls": "dual_volume_tone_toggle",
         "note": "4-knob layout gives independent neck/bridge blend control.",
@@ -364,7 +553,26 @@ AUTO_GUITAR_PROFILE_BY_TYPE = {
 
 STYLE_PLAYBOOK = {
     "metal": {
-        "concertProgression": ["Am - F - C - G", "Am - G - F - G"],
+        "concertProgression": ["Em - C - G - D", "Am - F - C - G"],
+        "progressionPool": [
+            "Em - C - G - D",
+            "Am - F - C - G",
+            "Em - D - C - D",
+            "Bm - G - D - A",
+            "F#m - D - A - E",
+            "Dm - Bb - F - C",
+            "Em - C - D - Em",
+            "Cm - Ab - Eb - Bb",
+            "C - Bb - Ab - Bb",
+            "E5 - G5 - A5 - C5",
+            "B5 - A5 - G5 - A5",
+            "Bm - A - G - F#",
+        ],
+        "popularTop3": [
+            "Em - C - G - D",
+            "Am - F - C - G",
+            "Bm - G - D - A",
+        ],
         "capo5Shapes": ["Em - C - G - D", "Em - D - C - D"],
         "openShapes": ["Em", "C", "G", "D", "Am"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
@@ -372,7 +580,26 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Work the 8th-10th fret pocket with aggressive bends and short repeating motifs.",
     },
     "rock": {
-        "concertProgression": ["C - G - Am - F", "D - G - A - G"],
+        "concertProgression": ["C - G - Am - F", "G - D - Em - C"],
+        "progressionPool": [
+            "C - G - Am - F",
+            "G - D - Em - C",
+            "D - A - Bm - G",
+            "A - E - F#m - D",
+            "E - B - C#m - A",
+            "D - G - A - G",
+            "G - C - D - C",
+            "A - D - E - D",
+            "E - D - A - E",
+            "Bm - G - D - A",
+            "F - C - Dm - Bb",
+            "C - F - G - F",
+        ],
+        "popularTop3": [
+            "C - G - Am - F",
+            "G - D - Em - C",
+            "D - A - Bm - G",
+        ],
         "capo5Shapes": ["G - D - Em - C", "A - D - E - D"],
         "openShapes": ["G", "D", "Em", "C", "A", "E"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
@@ -380,7 +607,26 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Target chord tones from the 8th-fret G-shape box and resolve on downbeats.",
     },
     "classic-rock": {
-        "concertProgression": ["D - G - A - G", "C - F - G - F"],
+        "concertProgression": ["D - G - A - G", "A - D - E - D"],
+        "progressionPool": [
+            "D - G - A - G",
+            "A - D - E - D",
+            "E - A - B - A",
+            "G - C - D - C",
+            "A - E - D - A",
+            "C - F - G - F",
+            "D - C - G - D",
+            "E - D - A - E",
+            "G - D - C - G",
+            "A7 - D7 - E7 - D7",
+            "D7 - G7 - A7 - G7",
+            "Bm - A - G - A",
+        ],
+        "popularTop3": [
+            "D - G - A - G",
+            "A - D - E - D",
+            "E - A - B - A",
+        ],
         "capo5Shapes": ["A - D - E - D", "G - C - D - C"],
         "openShapes": ["A", "D", "E", "G", "C"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
@@ -388,7 +634,26 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Use 8th-fret box bends and vibrato for vintage lead phrasing.",
     },
     "pop": {
-        "concertProgression": ["C - G - Am - F", "F - C - Dm - Bbmaj7"],
+        "concertProgression": ["C - G - Am - F", "G - D - Em - C"],
+        "progressionPool": [
+            "C - G - Am - F",
+            "G - D - Em - C",
+            "D - A - Bm - G",
+            "A - E - F#m - D",
+            "F - C - Dm - Bb",
+            "F - C - Dm - Bbmaj7",
+            "C - Am - F - G",
+            "G - Em - C - D",
+            "E - B - C#m - A",
+            "Bb - F - Gm - Eb",
+            "Dm - Bb - F - C",
+            "C - F - Am - G",
+        ],
+        "popularTop3": [
+            "C - G - Am - F",
+            "G - D - Em - C",
+            "D - A - Bm - G",
+        ],
         "capo5Shapes": ["G - D - Em - C", "C - G - Am - Fmaj7"],
         "openShapes": ["C", "G", "Am", "Fmaj7", "D", "Em", "Cadd9"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
@@ -396,7 +661,26 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Keep melodies in the 8th-fret box short, hooky, and rhythm-aware.",
     },
     "country": {
-        "concertProgression": ["C - F - G - C", "G - C - D - G"],
+        "concertProgression": ["G - C - D - G", "D - G - A - D"],
+        "progressionPool": [
+            "G - C - D - G",
+            "D - G - A - D",
+            "A - D - E - A",
+            "E - A - B - E",
+            "C - F - G - C",
+            "G - Em - C - D",
+            "D - Bm - G - A",
+            "A - F#m - D - E",
+            "G - D - C - G",
+            "E - B - A - E",
+            "C - G - F - C",
+            "D - A - G - D",
+        ],
+        "popularTop3": [
+            "G - C - D - G",
+            "D - G - A - D",
+            "A - D - E - A",
+        ],
         "capo5Shapes": ["G - C - D - G", "D - G - A - D"],
         "openShapes": ["G", "C", "D", "A", "Em"],
         "capoGuide": "Exact mapping: concert C-F-G becomes G-C-D shapes with capo on fret 5.",
@@ -405,6 +689,25 @@ STYLE_PLAYBOOK = {
     },
     "hip-hop": {
         "concertProgression": ["Am7 - Fmaj7 - C - Gsus2", "Dm7 - C - Bbmaj7 - Am7"],
+        "progressionPool": [
+            "Am7 - Fmaj7 - C - Gsus2",
+            "Dm7 - C - Bbmaj7 - Am7",
+            "Em7 - Cmaj7 - G - Dsus2",
+            "Fm7 - Dbmaj7 - Ab - Eb",
+            "Cm7 - Abmaj7 - Eb - Bb",
+            "Bm7 - Gmaj7 - D - A",
+            "Am7 - G - Fmaj7 - Em7",
+            "Dm7 - Bbmaj7 - F - C",
+            "Em9 - Cmaj7 - G6 - Dadd9",
+            "Cm7 - Bb - Abmaj7 - Gm7",
+            "F#m7 - Dmaj7 - A - E",
+            "Gm7 - Ebmaj7 - Bb - F",
+        ],
+        "popularTop3": [
+            "Am7 - Fmaj7 - C - Gsus2",
+            "Dm7 - C - Bbmaj7 - Am7",
+            "Em7 - Cmaj7 - G - Dsus2",
+        ],
         "capo5Shapes": ["Em7 - Cmaj7 - G - Dsus2", "Am7 - G - Fmaj7 - Em7"],
         "openShapes": ["Em7", "Cmaj7", "G", "Dsus2", "Am7", "Fmaj7"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
@@ -412,13 +715,81 @@ STYLE_PLAYBOOK = {
         "soloGuide": "Use sparse 8th-fret pocket phrases, rhythmic rests, and short slides.",
     },
     "blues": {
-        "concertProgression": ["A7 - D7 - E7 - D7", "D7 - G7 - A7 - G7"],
+        "concertProgression": ["A7 - D7 - E7 - D7", "E7 - A7 - B7 - A7"],
+        "progressionPool": [
+            "A7 - D7 - E7 - D7",
+            "E7 - A7 - B7 - A7",
+            "D7 - G7 - A7 - G7",
+            "G7 - C7 - D7 - C7",
+            "A7 - A7 - D7 - A7",
+            "E7 - D7 - A7 - E7",
+            "C7 - F7 - G7 - F7",
+            "B7 - E7 - F#7 - E7",
+            "A7 - D9 - E9 - D9",
+            "E7 - A7 - E7 - B7",
+            "G7 - G7 - C7 - G7",
+            "D7 - A7 - G7 - D7",
+        ],
+        "popularTop3": [
+            "A7 - D7 - E7 - D7",
+            "E7 - A7 - B7 - A7",
+            "D7 - G7 - A7 - G7",
+        ],
         "capo5Shapes": ["E7 - A7 - B7 - A7", "A7 - D7 - E7 - D7"],
         "openShapes": ["E7", "A7", "B7", "D7", "G"],
         "capoGuide": "Capo rule: to sound C-F-G with capo on fret 5, play G-C-D open shapes.",
         "pentatonicFret": "G-shape minor pentatonic around the 8th fret with blue-note passing tones.",
         "soloGuide": "Target roots and b5 color tones in the 8th-fret box on turnarounds.",
     },
+}
+
+CRAZY_SCALE_LIBRARY = {
+    "hungarian_minor": {
+        "name": "Hungarian Minor",
+        "formula": "1 2 b3 #4 5 b6 7",
+        "intervals": [0, 2, 3, 6, 7, 8, 11],
+        "why": "Tense minor color with a raised fourth for dramatic lead movement.",
+    },
+    "phrygian_dominant": {
+        "name": "Phrygian Dominant",
+        "formula": "1 b2 3 4 5 b6 b7",
+        "intervals": [0, 1, 4, 5, 7, 8, 10],
+        "why": "Exotic dominant tension that still resolves strongly to the tonic.",
+    },
+    "double_harmonic_major": {
+        "name": "Double Harmonic Major",
+        "formula": "1 b2 3 4 5 b6 7",
+        "intervals": [0, 1, 4, 5, 7, 8, 11],
+        "why": "Wide-interval dramatic sound that keeps a major third center.",
+    },
+    "lydian_dominant": {
+        "name": "Lydian Dominant",
+        "formula": "1 2 3 #4 5 6 b7",
+        "intervals": [0, 2, 4, 6, 7, 9, 10],
+        "why": "Bright #4 color with dominant pull; great for modern fusion flavors.",
+    },
+    "harmonic_minor": {
+        "name": "Harmonic Minor",
+        "formula": "1 2 b3 4 5 b6 7",
+        "intervals": [0, 2, 3, 5, 7, 8, 11],
+        "why": "Minor scale with a leading tone for strong melodic resolution.",
+    },
+    "whole_tone": {
+        "name": "Whole Tone",
+        "formula": "1 2 3 #4 #5 b7",
+        "intervals": [0, 2, 4, 6, 8, 10],
+        "why": "Symmetrical floating sound for unexpected modern transitions.",
+    },
+}
+
+CRAZY_SCALE_BY_GENRE = {
+    "metal": ["hungarian_minor", "phrygian_dominant", "double_harmonic_major", "harmonic_minor"],
+    "rock": ["harmonic_minor", "lydian_dominant", "phrygian_dominant", "hungarian_minor"],
+    "classic-rock": ["harmonic_minor", "lydian_dominant", "whole_tone"],
+    "pop": ["lydian_dominant", "whole_tone", "harmonic_minor"],
+    "country": ["lydian_dominant", "harmonic_minor", "whole_tone"],
+    "hip-hop": ["phrygian_dominant", "whole_tone", "lydian_dominant", "hungarian_minor"],
+    "blues": ["phrygian_dominant", "harmonic_minor", "whole_tone"],
 }
 
 USUAL_KEYS_BY_GENRE = {
@@ -485,6 +856,7 @@ else:
 STATE_FILE = APP_ROOT / ".pedal_architect_py_state.json"
 APP_CONFIG_FILENAME = "pyqt_app_config.json"
 APP_CONFIG_FILE = APP_ROOT / APP_CONFIG_FILENAME
+SECRETS_CONFIG_FILE = APP_ROOT / ".secrets" / APP_CONFIG_FILENAME
 FEEDBACK_LIMITER_FILE = APP_ROOT / ".pedal_architect_feedback_limits.json"
 PEDAL_MIME_TYPE = "application/x-pedal-architect-pedal-id"
 PEDAL_SOURCE_MIME_TYPE = "application/x-pedal-architect-source"
@@ -511,6 +883,17 @@ PEDAL_COLORS = {
 }
 PEDAL_TEXT_COLORS = {
     "rc30": "#fff7f7",
+}
+PEDAL_IMAGE_FILES = {
+    "cs3": "cs3.png",
+    "sd1": "sd1.png",
+    "bd2": "bd2.png",
+    "ds1": "ds1.png",
+    "ge7": "ge7.png",
+    "eq10": "eq10.png",
+    "ch1": "ch1.png",
+    "dd3": "dd3.png",
+    "rc30": "rc30.png",
 }
 GE7_BANDS = ["100", "200", "400", "800", "1.6k", "3.2k", "6.4k"]
 EQ10_BANDS = ["31.25", "62.5", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
@@ -541,6 +924,10 @@ DEFAULT_APP_CONFIG = {
         "zelle_handle": "",
     },
 }
+
+def pedal_asset_path(filename):
+    return Path(__file__).resolve().parent / "assets" / "pedals" / filename
+
 
 NOTE_TO_PITCH_CLASS = {
     "C": 0,
@@ -726,6 +1113,8 @@ class PedalCanvasWidget(QtWidgets.QWidget):
     PEDAL_SIZE = QtCore.QSize(84, 124)
     PEDAL_JACK_INSET = 6
     PEDAL_JACK_RADIUS = 3
+    PEDAL_ROUTE_PADDING = 2
+    JACK_OUTSET = 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -746,7 +1135,9 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         self.link_start = None
         self.preview_link_to = None
         self.guitar_pixmaps = {}
+        self.pedal_pixmaps = {}
         self.load_guitar_pixmaps()
+        self.load_pedal_pixmaps()
 
     def load_guitar_pixmaps(self):
         guitar_dir = Path(__file__).resolve().parent / "assets" / "guitars"
@@ -760,6 +1151,13 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             pixmap = QtGui.QPixmap(str(path))
             if not pixmap.isNull():
                 self.guitar_pixmaps[key] = pixmap
+
+    def load_pedal_pixmaps(self):
+        for pedal_id, filename in PEDAL_IMAGE_FILES.items():
+            path = pedal_asset_path(filename)
+            pixmap = QtGui.QPixmap(str(path))
+            if not pixmap.isNull():
+                self.pedal_pixmaps[pedal_id] = pixmap
 
     def set_theme(self, theme):
         self.theme = theme
@@ -890,11 +1288,11 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     def amp_input_pos(self):
         rect = self.amp_rect()
-        return QtCore.QPoint(rect.right(), rect.center().y())
+        return QtCore.QPoint(rect.right() + self.JACK_OUTSET, rect.center().y())
 
     def guitar_output_pos(self):
         rect = self.guitar_rect()
-        return QtCore.QPoint(rect.left(), rect.center().y() + max(10, rect.height() // 6))
+        return QtCore.QPoint(rect.left() - self.JACK_OUTSET, rect.center().y() + max(10, rect.height() // 6))
 
     def pedal_rect(self, pedal_id):
         position = self.pedal_positions.get(pedal_id, QtCore.QPoint(16, 16))
@@ -902,11 +1300,11 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     def pedal_input_pos(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
-        return QtCore.QPoint(rect.right() - self.PEDAL_JACK_INSET, rect.center().y())
+        return QtCore.QPoint(rect.right() + self.JACK_OUTSET, rect.center().y())
 
     def pedal_output_pos(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
-        return QtCore.QPoint(rect.left() + self.PEDAL_JACK_INSET, rect.center().y())
+        return QtCore.QPoint(rect.left() - self.JACK_OUTSET, rect.center().y())
 
     def pedal_remove_button_rect(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
@@ -952,22 +1350,250 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 return pedal_id
         return None
 
-    def draw_link(self, painter, start, end, color, width=3, dashed=False):
-        path = QtGui.QPainterPath()
-        path.moveTo(start)
-        delta = max(32, abs(end.x() - start.x()) // 2)
-        if start.x() >= end.x():
-            c1 = QtCore.QPoint(start.x() - delta, start.y())
-            c2 = QtCore.QPoint(end.x() + delta, end.y())
-        else:
-            c1 = QtCore.QPoint(start.x() + delta, start.y())
-            c2 = QtCore.QPoint(end.x() - delta, end.y())
-        path.cubicTo(c1, c2, end)
+    def draw_link(self, painter, points, color, width=3, dashed=False):
+        if len(points) < 2:
+            return
         pen = QtGui.QPen(QtGui.QColor(color), width, QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
         pen.setCapStyle(QtCore.Qt.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(QtCore.Qt.NoBrush)
+        path = QtGui.QPainterPath(points[0])
+        for point in points[1:]:
+            path.lineTo(point)
         painter.drawPath(path)
+
+    def segment_intersects_rect(self, p1, p2, rect):
+        if p1.x() == p2.x():
+            x = p1.x()
+            y1, y2 = sorted((p1.y(), p2.y()))
+            return rect.left() <= x <= rect.right() and y1 <= rect.bottom() and y2 >= rect.top()
+        if p1.y() == p2.y():
+            y = p1.y()
+            x1, x2 = sorted((p1.x(), p2.x()))
+            return rect.top() <= y <= rect.bottom() and x1 <= rect.right() and x2 >= rect.left()
+        return QtCore.QLineF(p1, p2).intersects(QtCore.QLineF(rect.topLeft(), rect.bottomRight()))[0] != QtCore.QLineF.NoIntersection
+
+    def polyline_hits_obstacles(self, points, obstacles):
+        if len(points) < 2:
+            return False
+        for idx in range(len(points) - 1):
+            p1 = points[idx]
+            p2 = points[idx + 1]
+            for rect in obstacles:
+                if self.segment_intersects_rect(p1, p2, rect):
+                    return True
+        return False
+
+    def route_grid_path(self, start_stub, end_stub, obstacles, min_x, max_x, min_y, max_y):
+        step = 6
+
+        def snap(value, lo, hi):
+            snapped = int(round(value / step) * step)
+            return clamp(snapped, lo, hi)
+
+        def is_blocked(x, y):
+            point = QtCore.QPoint(x, y)
+            for rect in obstacles:
+                if rect.contains(point):
+                    return True
+            return False
+
+        def nearest_free(x, y):
+            if not is_blocked(x, y):
+                return (x, y)
+            seen = {(x, y)}
+            frontier = deque([(x, y)])
+            while frontier:
+                cx, cy = frontier.popleft()
+                for dx, dy in ((step, 0), (-step, 0), (0, step), (0, -step)):
+                    nx = clamp(cx + dx, min_x, max_x)
+                    ny = clamp(cy + dy, min_y, max_y)
+                    key = (nx, ny)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if not is_blocked(nx, ny):
+                        return key
+                    frontier.append(key)
+            return (x, y)
+
+        sx = snap(start_stub.x(), min_x, max_x)
+        sy = snap(start_stub.y(), min_y, max_y)
+        ex = snap(end_stub.x(), min_x, max_x)
+        ey = snap(end_stub.y(), min_y, max_y)
+        start = nearest_free(sx, sy)
+        goal = nearest_free(ex, ey)
+
+        def heuristic(node):
+            return abs(node[0] - goal[0]) + abs(node[1] - goal[1])
+
+        open_heap = []
+        heapq.heappush(open_heap, (heuristic(start), 0, start))
+        came_from = {}
+        g_score = {start: 0}
+        closed = set()
+
+        while open_heap:
+            _, current_cost, current = heapq.heappop(open_heap)
+            if current in closed:
+                continue
+            if current == goal:
+                path = [current]
+                while current in came_from:
+                    current = came_from[current]
+                    path.append(current)
+                path.reverse()
+                points = [QtCore.QPoint(x, y) for x, y in path]
+                return points
+            closed.add(current)
+            cx, cy = current
+            for dx, dy in ((step, 0), (-step, 0), (0, step), (0, -step)):
+                nx = clamp(cx + dx, min_x, max_x)
+                ny = clamp(cy + dy, min_y, max_y)
+                neighbor = (nx, ny)
+                if neighbor in closed or is_blocked(nx, ny):
+                    continue
+                tentative = current_cost + step
+                if tentative < g_score.get(neighbor, 1 << 30):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative
+                    heapq.heappush(open_heap, (tentative + heuristic(neighbor), tentative, neighbor))
+        return []
+
+    def connection_obstacles(self, source_node=None, target_node=None):
+        obstacles = []
+        if source_node != GUITAR_NODE_ID and target_node != GUITAR_NODE_ID:
+            obstacles.append(self.guitar_rect().adjusted(-8, -8, 8, 8))
+        if source_node != AMP_NODE_ID and target_node != AMP_NODE_ID:
+            obstacles.append(self.amp_rect().adjusted(-8, -8, 8, 8))
+        for pedal_id in self.pedal_ids:
+            base = self.pedal_rect(pedal_id)
+            padded = base.adjusted(-self.PEDAL_ROUTE_PADDING, -self.PEDAL_ROUTE_PADDING, self.PEDAL_ROUTE_PADDING, self.PEDAL_ROUTE_PADDING)
+            if pedal_id == source_node:
+                left_safe = int(round(base.width() * 0.32))
+                guard = base.adjusted(left_safe, 1, -1, -1)
+                obstacles.append(guard)
+            elif pedal_id == target_node:
+                right_safe = int(round(base.width() * 0.32))
+                guard = base.adjusted(1, 1, -right_safe, -1)
+                obstacles.append(guard)
+            else:
+                obstacles.append(padded)
+        return obstacles
+
+    def build_connection_path(self, start, end, source_node=None, target_node=None):
+        stub = 14
+        start_stub = QtCore.QPoint(start.x() - stub, start.y())
+        end_stub = QtCore.QPoint(end.x() + stub, end.y())
+        obstacles = self.connection_obstacles(source_node, target_node)
+        min_y = 8
+        max_y = max(min_y, self.height() - 8)
+        min_x = 8
+        max_x = max(min_x, self.width() - 8)
+
+        def dedupe_points(points):
+            out = []
+            for pt in points:
+                if not out or pt != out[-1]:
+                    out.append(pt)
+            return out
+
+        def path_length(points):
+            total = 0
+            for i in range(len(points) - 1):
+                total += abs(points[i + 1].x() - points[i].x()) + abs(points[i + 1].y() - points[i].y())
+            return total
+
+        candidates = []
+        candidates.append(
+            [
+                start,
+                start_stub,
+                QtCore.QPoint(end_stub.x(), start_stub.y()),
+                end_stub,
+                end,
+            ]
+        )
+
+        y_candidates = {clamp(start_stub.y(), min_y, max_y), clamp(end_stub.y(), min_y, max_y)}
+        if obstacles:
+            top = min(rect.top() for rect in obstacles)
+            bottom = max(rect.bottom() for rect in obstacles)
+            y_candidates.update(
+                {
+                    clamp(top - 18, min_y, max_y),
+                    clamp(bottom + 18, min_y, max_y),
+                }
+            )
+            for rect in obstacles:
+                y_candidates.add(clamp(rect.top() - 14, min_y, max_y))
+                y_candidates.add(clamp(rect.bottom() + 14, min_y, max_y))
+        else:
+            y_candidates.update(
+                {
+                    clamp(start_stub.y() - 32, min_y, max_y),
+                    clamp(start_stub.y() + 32, min_y, max_y),
+                    clamp(end_stub.y() - 32, min_y, max_y),
+                    clamp(end_stub.y() + 32, min_y, max_y),
+                }
+            )
+
+        for y in sorted(y_candidates):
+            candidates.append(
+                [
+                    start,
+                    start_stub,
+                    QtCore.QPoint(start_stub.x(), y),
+                    QtCore.QPoint(end_stub.x(), y),
+                    end_stub,
+                    end,
+                ]
+            )
+
+        x_candidates = {clamp(min(start_stub.x(), end_stub.x()) - 20, min_x, max_x), clamp(max(start_stub.x(), end_stub.x()) + 20, min_x, max_x)}
+        for rect in obstacles:
+            x_candidates.add(clamp(rect.left() - 16, min_x, max_x))
+            x_candidates.add(clamp(rect.right() + 16, min_x, max_x))
+        for x in sorted(x_candidates):
+            candidates.append(
+                [
+                    start,
+                    start_stub,
+                    QtCore.QPoint(x, start_stub.y()),
+                    QtCore.QPoint(x, end_stub.y()),
+                    end_stub,
+                    end,
+                ]
+            )
+
+        valid = []
+        for points in candidates:
+            pts = dedupe_points(points)
+            if len(pts) < 2:
+                continue
+            if not self.polyline_hits_obstacles(pts, obstacles):
+                valid.append((path_length(pts), pts))
+
+        if valid:
+            valid.sort(key=lambda item: item[0])
+            return valid[0][1]
+
+        grid_path = self.route_grid_path(start_stub, end_stub, obstacles, min_x, max_x, min_y, max_y)
+        if grid_path:
+            routed = dedupe_points([start] + grid_path + [end])
+            if not self.polyline_hits_obstacles(routed, obstacles):
+                return routed
+
+        return dedupe_points(
+            [
+                start,
+                start_stub,
+                QtCore.QPoint(end_stub.x(), start_stub.y()),
+                end_stub,
+                end,
+            ]
+        )
 
     def knob_angle(self, value_percent):
         value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
@@ -976,21 +1602,13 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     def draw_knob(self, painter, center, value_percent):
         value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
-        knob_rect = QtCore.QRectF(center.x() - 8, center.y() - 8, 16, 16)
-        knob_fill = QtGui.QRadialGradient(knob_rect.center(), 8.5)
-        knob_fill.setColorAt(0.0, QtGui.QColor("#f9fbff"))
-        knob_fill.setColorAt(0.55, QtGui.QColor("#e5ebf3"))
-        knob_fill.setColorAt(1.0, QtGui.QColor("#b9c4d2"))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#1a2027"), 1.2))
-        painter.setBrush(QtGui.QBrush(knob_fill))
-        painter.drawEllipse(knob_rect)
         angle_deg = self.knob_angle(value)
         rad = math.radians(angle_deg)
         tip = QtCore.QPoint(
-            int(round(center.x() + math.cos(rad) * 7.1)),
-            int(round(center.y() - math.sin(rad) * 7.1)),
+            int(round(center.x() + math.cos(rad) * 7.2)),
+            int(round(center.y() - math.sin(rad) * 7.2)),
         )
-        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 2.4, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 2.6, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
         painter.drawLine(center, tip)
         marker = QtCore.QPointF(
             center.x() + math.cos(rad) * 4.8,
@@ -998,7 +1616,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         )
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
-        painter.drawEllipse(marker, 1.9, 1.9)
+        painter.drawEllipse(marker, 2.1, 2.1)
 
     def draw_slider_lever(self, painter, track_rect, value_percent, handle_color="#f7f9fc"):
         value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
@@ -1091,6 +1709,9 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             return self.guitar_pixmaps[self.guitar_profile_key]
         return self.guitar_pixmaps.get("electric_2_knob_toggle")
 
+    def pedal_pixmap(self, pedal_id):
+        return self.pedal_pixmaps.get(pedal_id)
+
     def amp_brand_style(self):
         return AMP_BRAND_COLORS.get(self.amp_model_key, {"bg": self.theme["amp_bg"], "fg": self.theme["amp_fg"]})
 
@@ -1175,14 +1796,15 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 continue
             start = self.guitar_output_pos() if src == GUITAR_NODE_ID else self.pedal_output_pos(src)
             end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
-            self.draw_link(painter, start, end, self.theme["canvas_edge"], width=3)
+            path_points = self.build_connection_path(start, end, src, dst)
+            self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3)
 
         if self.link_start and self.preview_link_to:
             start = self.guitar_output_pos() if self.link_start == GUITAR_NODE_ID else self.pedal_output_pos(self.link_start)
+            preview_points = [start, QtCore.QPoint(start.x() - 16, start.y()), QtCore.QPoint(self.preview_link_to.x(), start.y()), self.preview_link_to]
             self.draw_link(
                 painter,
-                start,
-                self.preview_link_to,
+                preview_points,
                 self.theme["canvas_edge_preview"],
                 width=2,
                 dashed=True,
@@ -1190,15 +1812,16 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
         for pedal_id in self.pedal_ids:
             rect = self.pedal_rect(pedal_id)
+            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
             base = QtGui.QColor(PEDAL_COLORS.get(pedal_id, "#b0b0b0"))
             shade = base.darker(122)
-            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
             gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
             gradient.setColorAt(0.0, base.lighter(124))
             gradient.setColorAt(0.58, base)
             gradient.setColorAt(1.0, shade)
             painter.setBrush(QtGui.QBrush(gradient))
             painter.drawRoundedRect(rect, 10, 10)
+
             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 52), 1))
             painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 9, 9)
             painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 34), 1))
@@ -1500,24 +2123,41 @@ def evaluate_chain_order(chain, genre_key, guitar_type, style_target, include_no
         else:
             add_rule(idx["ds1"] < idx["sd1"], 8, "DS-1 is before SD-1 for softer vintage clipping.")
 
-    if has("ge7") and drive_indices:
-        wants_post = genre_key in modern_genres and guitar_type == "electric"
+    if has("ge7") and has("eq10") and drive_indices:
         add_rule(
-            idx["ge7"] > last_drive if wants_post else idx["ge7"] < first_drive,
-            10,
-            "GE-7 placement matches this style's contour strategy.",
-        )
-
-    if has("eq10") and drive_indices:
-        wants_post = genre_key in modern_genres and guitar_type == "electric"
-        add_rule(
-            idx["eq10"] > last_drive if wants_post else idx["eq10"] < first_drive,
+            idx["ge7"] < first_drive,
             11,
-            "10-band EQ placement matches this style's contour strategy.",
+            "GE-7 is before gain so it can shape what the drive stages clip.",
         )
+        add_rule(
+            idx["eq10"] > last_drive,
+            11,
+            "10-band EQ is after gain for final contour and mix placement.",
+        )
+    else:
+        if has("ge7") and drive_indices:
+            wants_post = genre_key in {"metal", "hip-hop"} and guitar_type == "electric"
+            add_rule(
+                idx["ge7"] > last_drive if wants_post else idx["ge7"] < first_drive,
+                10,
+                "GE-7 placement matches this style's contour strategy.",
+            )
+
+        if has("eq10") and drive_indices:
+            wants_post = genre_key in modern_genres and guitar_type == "electric"
+            add_rule(
+                idx["eq10"] > last_drive if wants_post else idx["eq10"] < first_drive,
+                11,
+                "10-band EQ placement matches this style's contour strategy.",
+            )
+
+    if has("ch1") and drive_indices:
+        add_rule(idx["ch1"] > last_drive, 8, "CH-1 is after gain so chorus modulation stays clear.")
 
     if has("dd3") and drive_indices:
         add_rule(idx["dd3"] > last_drive, 12, "DD-3 is after gain for clearer repeat definition.")
+    if has("ch1") and has("dd3"):
+        add_rule(idx["ch1"] < idx["dd3"], 6, "CH-1 feeds DD-3 so chorus texture repeats naturally.")
 
     if has("rc30"):
         add_rule(idx["rc30"] == (len(chain) - 1), 18, "RC-30 is at chain end for stable loop playback.")
@@ -1527,18 +2167,115 @@ def evaluate_chain_order(chain, genre_key, guitar_type, style_target, include_no
     eq_justification = ""
     if has("ge7") and has("eq10"):
         gap = abs(idx["ge7"] - idx["eq10"])
-        if gap == 1:
-            score -= 9
-            eq_justification = "GE-7 and 10-band are adjacent in your chain; this works but can over-stack filtering."
+        if drive_indices and idx["ge7"] < first_drive and idx["eq10"] > last_drive:
+            score += 10
+            eq_justification = "GE-7 is pre-drive while 10-band is post-drive, giving two distinct EQ stages."
+        elif gap == 1:
+            score -= 12
+            eq_justification = "GE-7 and 10-band are adjacent; split them apart for clearer, less compounded filtering."
         else:
-            score += 6
-            eq_justification = "GE-7 and 10-band are separated to keep each EQ stage distinct and clearer."
+            score += 4
+            eq_justification = "GE-7 and 10-band are separated to keep each EQ stage distinct."
 
     return {
         "score": score,
         "highlights": notes,
         "eq_justification": eq_justification,
     }
+
+
+def apply_order_dependent_pedal_tuning(recommendation, chain, genre_key, guitar_type):
+    chain = sanitize_chain(chain)
+    if not chain:
+        return
+
+    idx = {pid: i for i, pid in enumerate(chain)}
+    has = lambda pid: pid in idx and pid in recommendation["pedals"]
+    notes = recommendation["notes"]
+    pedals = recommendation["pedals"]
+
+    drive_ids = [pid for pid in ["sd1", "bd2", "ds1"] if pid in idx]
+    drive_indices = sorted(idx[pid] for pid in drive_ids)
+    first_drive = drive_indices[0] if drive_indices else -1
+    last_drive = drive_indices[-1] if drive_indices else -1
+
+    def nudge_pct(value, delta):
+        return clamp(int(round(value + delta)), 0, 100)
+
+    def nudge_db(value, delta):
+        return max(-15, min(15, int(round(value + delta))))
+
+    if has("sd1") and has("ds1"):
+        sd1 = pedals["sd1"]
+        ds1 = pedals["ds1"]
+        if idx["sd1"] < idx["ds1"]:
+            sd1["drive"] = min(sd1.get("drive", 25), 28)
+            sd1["level"] = nudge_pct(sd1.get("level", 60), 6)
+            ds1["dist"] = nudge_pct(ds1.get("dist", 50), 4)
+            notes.append("SD-1 feeds DS-1, so SD-1 is tuned as a boost and DS-1 carries the main saturation.")
+        else:
+            ds1["dist"] = max(ds1.get("dist", 45) - 8, 18)
+            sd1["drive"] = nudge_pct(sd1.get("drive", 30), 6)
+            sd1["tone"] = nudge_pct(sd1.get("tone", 50), -4)
+            notes.append("DS-1 into SD-1 is treated as smoother clipping into a focused mid push.")
+
+    if has("cs3") and drive_indices:
+        cs3 = pedals["cs3"]
+        if idx["cs3"] < first_drive:
+            cs3["attack"] = nudge_pct(cs3.get("attack", 50), 3)
+            cs3["sustain"] = nudge_pct(cs3.get("sustain", 50), 2)
+            notes.append("CS-3 before drive keeps attack defined while adding sustain.")
+        else:
+            cs3["sustain"] = nudge_pct(cs3.get("sustain", 50), -6)
+            notes.append("CS-3 after drive is softened to avoid over-compression noise buildup.")
+
+    if has("ge7"):
+        ge7 = pedals["ge7"]
+        bands = ge7.setdefault("bands", {})
+        if drive_indices and idx["ge7"] < first_drive:
+            ge7["mode"] = "Pre-drive focus"
+            bands["100"] = nudge_db(bands.get("100", 0), -1)
+            bands["200"] = nudge_db(bands.get("200", 0), -1)
+            bands["800"] = nudge_db(bands.get("800", 0), 1)
+            bands["1.6k"] = nudge_db(bands.get("1.6k", 0), 1)
+        elif drive_indices and idx["ge7"] > last_drive:
+            ge7["mode"] = "Post-drive shape"
+            bands["3.2k"] = nudge_db(bands.get("3.2k", 0), 1)
+            bands["6.4k"] = nudge_db(bands.get("6.4k", 0), -1)
+
+    if has("eq10"):
+        eq10 = pedals["eq10"]
+        bands = eq10.setdefault("bands", {})
+        if drive_indices and idx["eq10"] > last_drive:
+            eq10["mode"] = "Post-drive sculpt"
+            eq10["volume"] = nudge_db(eq10.get("volume", 0), 1)
+            bands["8k"] = nudge_db(bands.get("8k", 0), -1)
+            bands["16k"] = nudge_db(bands.get("16k", 0), -1)
+        elif drive_indices and idx["eq10"] < first_drive:
+            eq10["mode"] = "Pre-drive push"
+            bands["125"] = nudge_db(bands.get("125", 0), 1)
+            bands["250"] = nudge_db(bands.get("250", 0), 1)
+            bands["4k"] = nudge_db(bands.get("4k", 0), -1)
+
+    if has("ch1") and has("dd3") and idx["ch1"] > idx["dd3"]:
+        ch1 = pedals["ch1"]
+        ch1["depth"] = nudge_pct(ch1.get("depth", 40), -6)
+        notes.append("CH-1 is after DD-3 here, so chorus depth is reduced to keep repeats intelligible.")
+    elif has("ch1") and has("dd3"):
+        notes.append("CH-1 before DD-3 keeps repeats wide without washing out pick attack.")
+
+    if has("rc30") and idx["rc30"] != len(chain) - 1:
+        rc30 = pedals["rc30"]
+        rc30["rhythmLevel"] = nudge_pct(rc30.get("rhythmLevel", 16), -3)
+        notes.append("RC-30 is not last in chain, so loop rhythm level is trimmed to reduce downstream coloration.")
+
+    drive_count = len(drive_ids)
+    if drive_count >= 2:
+        recommendation["amp"]["gain"] = nudge_pct(recommendation["amp"].get("gain", 50), -4)
+        notes.append("Multiple gain pedals are active, so amp gain is trimmed to preserve note separation.")
+    elif drive_count == 0 and guitar_type == "electric" and genre_key in {"rock", "classic-rock", "blues"}:
+        recommendation["amp"]["gain"] = nudge_pct(recommendation["amp"].get("gain", 50), 4)
+        notes.append("No drive pedals detected, so amp gain is raised slightly to keep sustain musical.")
 
 
 _ORDER_CACHE = {}
@@ -1702,6 +2439,8 @@ def build_recommendation(genre_key, chain, guitar_type, amp_model, guitar_profil
     }
     recommendation["notes"].append(profile["note"])
 
+    apply_order_dependent_pedal_tuning(recommendation, chain, genre_key, guitar_type)
+
     recommendation["notes"] = unique_list(recommendation["notes"])
     return recommendation
 
@@ -1749,8 +2488,11 @@ def parse_chord_token(token):
 
 def extract_concert_chords_for_genre(genre_key):
     playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+    progressions = playbook.get("popularTop3") or playbook.get("concertProgression", [])
+    if not progressions:
+        progressions = playbook.get("progressionPool", [])
     chords = []
-    for progression in playbook.get("concertProgression", []):
+    for progression in progressions:
         if not isinstance(progression, str):
             continue
         for token in progression.split("-"):
@@ -1758,6 +2500,53 @@ def extract_concert_chords_for_genre(genre_key):
             if clean:
                 chords.append(clean)
     return unique_list(chords)
+
+
+def sample_style_progressions(genre_key, count=2):
+    playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+    pool = [item for item in playbook.get("progressionPool", []) if isinstance(item, str) and item.strip()]
+    if not pool:
+        pool = [item for item in playbook.get("concertProgression", []) if isinstance(item, str) and item.strip()]
+    pool = unique_list(pool)
+    if not pool:
+        return []
+    if len(pool) <= count:
+        return pool
+    return random.sample(pool, count)
+
+
+def sample_popular_progression(genre_key):
+    playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+    top = [item for item in playbook.get("popularTop3", []) if isinstance(item, str) and item.strip()]
+    if top:
+        return random.choice(top)
+    fallback = playbook.get("concertProgression", [])
+    for item in fallback:
+        if isinstance(item, str) and item.strip():
+            return item
+    return ""
+
+
+def split_progression_tokens(progression):
+    if not isinstance(progression, str):
+        return []
+    return [part.strip() for part in progression.split("-") if isinstance(part, str) and part.strip()]
+
+
+def transpose_chord_root_for_capo(chord_token, capo_fret=5):
+    if not isinstance(chord_token, str):
+        return ""
+    match = CHORD_ROOT_RE.match(chord_token.strip())
+    if not match:
+        return chord_token.strip()
+    root_raw = f"{match.group(1)}{match.group(2)}"
+    root = normalize_note_name(root_raw)
+    if root not in NOTE_TO_PITCH_CLASS:
+        return chord_token.strip()
+    suffix = chord_token.strip()[match.end():]
+    target_pc = (NOTE_TO_PITCH_CLASS[root] - int(capo_fret)) % 12
+    shape_root = PITCH_CLASS_CANONICAL[target_pc]
+    return f"{shape_root}{suffix}"
 
 
 def determine_best_nashville_key(chord_tokens):
@@ -1815,7 +2604,18 @@ def major_usual_keys_for_genre(genre_key):
 
 
 def config_path_candidates():
-    candidates = [APP_CONFIG_FILE, Path.cwd() / APP_CONFIG_FILENAME]
+    candidates = []
+    override = str(os.getenv("PEDAL_ARCHITECT_CONFIG", "") or "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.extend(
+        [
+            SECRETS_CONFIG_FILE,
+            Path.cwd() / ".secrets" / APP_CONFIG_FILENAME,
+            APP_CONFIG_FILE,
+            Path.cwd() / APP_CONFIG_FILENAME,
+        ]
+    )
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", "")
         if meipass:
@@ -1892,7 +2692,7 @@ def caged_window_start(root_fret, shape_key, scale_family):
 class PentatonicNeckWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(420, 260)
+        self.setMinimumSize(520, 330)
         self.theme = THEMES["dark"]
         self.key_name = "C"
         self.shape_key = "g"
@@ -1955,6 +2755,15 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         luminance = (0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())
         return QtGui.QColor("#101418") if luminance > 170 else QtGui.QColor("#f7f9ff")
 
+    def ensure_root_note_contrast(self, root_color, note_color):
+        lightness_delta = abs(root_color.lightness() - note_color.lightness())
+        channel_delta = abs(root_color.red() - note_color.red()) + abs(root_color.green() - note_color.green()) + abs(root_color.blue() - note_color.blue())
+        if lightness_delta >= 50 or channel_delta >= 160:
+            return root_color
+        if note_color.lightness() < 132:
+            return QtGui.QColor("#ff5a5a")
+        return QtGui.QColor("#b1172b")
+
     def paintEvent(self, _event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -1965,7 +2774,7 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"])))
         painter.drawRoundedRect(panel, 8, 8)
 
-        fretboard = panel.adjusted(36, 22, -14, -32)
+        fretboard = panel.adjusted(44, 26, -18, -44)
         strings = 6
         fret_count = max(3, self.end_fret - self.start_fret + 1)
         string_gap = fretboard.height() / max(1, strings - 1)
@@ -1999,17 +2808,21 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
                 continue
             x = fretboard.left() + (idx + 0.5) * fret_gap
             y = fretboard.center().y()
-            painter.drawEllipse(QtCore.QPointF(x, y), 2.8, 2.8)
+            painter.drawEllipse(QtCore.QPointF(x, y), 3.6, 3.6)
 
         # Notes
+        root_fill = QtGui.QColor(self.theme.get("root_note", self.theme["tab_selected_bg"]))
+        scale_fill = QtGui.QColor(self.theme.get("scale_note", self.theme.get("positive", "#66d17a")))
+        root_fill = self.ensure_root_note_contrast(root_fill, scale_fill)
+        note_text_size = 11
         for point in self.note_points:
             idx = point["fret"] - self.start_fret
             if idx < 0 or idx >= fret_count:
                 continue
             x = fretboard.left() + (idx + 0.5) * fret_gap
             y = fretboard.top() + point["string_idx"] * string_gap
-            radius = 12.0 if point["is_root"] else 10.2
-            fill = QtGui.QColor(self.theme["tab_selected_bg"] if point["is_root"] else self.theme.get("positive", "#66d17a"))
+            radius = 14.0 if point["is_root"] else 12.0
+            fill = QtGui.QColor(root_fill if point["is_root"] else scale_fill)
             fg = self.contrast_text(fill)
             painter.setPen(QtGui.QPen(fill.darker(170), 1.2))
             painter.setBrush(QtGui.QBrush(fill))
@@ -2017,7 +2830,7 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
             painter.setPen(fg)
             font = painter.font()
             font.setBold(True)
-            font.setPointSize(max(8, font.pointSize() - 1))
+            font.setPointSize(note_text_size)
             painter.setFont(font)
             painter.drawText(
                 QtCore.QRectF(x - radius, y - radius, radius * 2, radius * 2),
@@ -2029,22 +2842,22 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         painter.setPen(QtGui.QColor(self.theme["text"]))
         label_font = painter.font()
         label_font.setBold(True)
-        label_font.setPointSize(max(9, label_font.pointSize() - 1))
+        label_font.setPointSize(note_text_size)
         painter.setFont(label_font)
         string_labels = ["e", "B", "G", "D", "A", "E"]
         for idx, label in enumerate(string_labels):
             y = fretboard.top() + idx * string_gap
-            painter.drawText(QtCore.QRectF(panel.left() + 4, y - 10, 20, 20), QtCore.Qt.AlignCenter, label)
+            painter.drawText(QtCore.QRectF(panel.left() + 4, y - 12, 26, 24), QtCore.Qt.AlignCenter, label)
 
         # Fret labels (larger and bolder)
         fret_font = painter.font()
         fret_font.setBold(True)
-        fret_font.setPointSize(max(10, fret_font.pointSize()))
+        fret_font.setPointSize(note_text_size)
         painter.setFont(fret_font)
         for idx in range(fret_count):
             fret = self.start_fret + idx
             x = fretboard.left() + (idx + 0.5) * fret_gap
-            box = QtCore.QRectF(x - 14, fretboard.bottom() + 6, 28, 18)
+            box = QtCore.QRectF(x - 18, fretboard.bottom() + 8, 36, 24)
             painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
             painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"]).lighter(110)))
             painter.drawRoundedRect(box, 4, 4)
@@ -2158,6 +2971,236 @@ class CircleOfFifthsWidget(QtWidgets.QWidget):
         )
 
 
+class PedalShowcaseWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(300, 360)
+        self.theme = THEMES["dark"]
+        self.pedal_id = BANK_ORDER[0]
+        self.face_values = {"knobs": [50, 50, 50]}
+        self.pedal_pixmaps = {}
+        self.load_pedal_pixmaps()
+
+    def load_pedal_pixmaps(self):
+        for pedal_id, filename in PEDAL_IMAGE_FILES.items():
+            path = pedal_asset_path(filename)
+            pixmap = QtGui.QPixmap(str(path))
+            if not pixmap.isNull():
+                self.pedal_pixmaps[pedal_id] = pixmap
+
+    def set_theme(self, theme):
+        self.theme = theme
+        self.update()
+
+    def set_pedal(self, pedal_id, face_values=None):
+        self.pedal_id = pedal_id if pedal_id in PEDAL_LIBRARY else BANK_ORDER[0]
+        self.face_values = face_values if isinstance(face_values, dict) else {"knobs": [50, 50, 50]}
+        self.update()
+
+    def knob_angle(self, value_percent):
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        absolute_minutes = int(round(7 * 60 + (value / 100.0) * (10 * 60))) % (12 * 60)
+        return 90 - (absolute_minutes * 0.5)
+
+    def draw_knob(self, painter, center, value_percent, radius=15):
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        angle_deg = self.knob_angle(value)
+        rad = math.radians(angle_deg)
+        tip = QtCore.QPointF(
+            center.x() + math.cos(rad) * (radius - 2.0),
+            center.y() - math.sin(rad) * (radius - 2.0),
+        )
+        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 2.8, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+        painter.drawLine(center, tip)
+        marker = QtCore.QPointF(
+            center.x() + math.cos(rad) * (radius * 0.62),
+            center.y() - math.sin(rad) * (radius * 0.62),
+        )
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
+        painter.drawEllipse(marker, 2.6, 2.6)
+
+    def draw_slider_lever(self, painter, track_rect, value_percent, handle_color="#f7f9fc"):
+        value = clamp(int(round(value_percent if isinstance(value_percent, (int, float)) else 50)), 0, 100)
+        track_fill = QtGui.QLinearGradient(track_rect.topLeft(), track_rect.bottomLeft())
+        track_fill.setColorAt(0.0, QtGui.QColor(24, 28, 34, 210))
+        track_fill.setColorAt(1.0, QtGui.QColor(9, 12, 15, 216))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#0f151c"), 1))
+        painter.setBrush(QtGui.QBrush(track_fill))
+        painter.drawRoundedRect(track_rect, 2, 2)
+        travel = max(1, track_rect.height() - 6)
+        y = track_rect.bottom() - int(round((value / 100.0) * travel)) - 3
+        handle = QtCore.QRect(track_rect.left() - 2, y, track_rect.width() + 4, 7)
+        handle_fill = QtGui.QLinearGradient(handle.topLeft(), handle.bottomLeft())
+        handle_fill.setColorAt(0.0, QtGui.QColor("#ffffff"))
+        handle_fill.setColorAt(1.0, QtGui.QColor(handle_color))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#1c232c"), 1))
+        painter.setBrush(QtGui.QBrush(handle_fill))
+        painter.drawRoundedRect(handle, 2, 2)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#d42027"), 1.5))
+        painter.drawLine(handle.left() + 1, handle.center().y(), handle.right() - 1, handle.center().y())
+
+    def draw_eq_face(self, painter, rect):
+        if self.pedal_id == "ge7":
+            slider_values = list(self.face_values.get("sliders", [50] * len(GE7_BANDS)))
+            while len(slider_values) < len(GE7_BANDS):
+                slider_values.append(50)
+            slider_values.append(self.face_values.get("level", 50))
+            track_count = len(slider_values)
+            left = rect.left() + int(round(rect.width() * 0.16))
+            right = rect.left() + int(round(rect.width() * 0.84))
+            top = rect.top() + int(round(rect.height() * 0.15))
+            track_height = int(round(rect.height() * 0.24))
+            span = max(1, right - left)
+            for idx, value in enumerate(slider_values):
+                x = left + int(round((idx / max(1, track_count - 1)) * span))
+                self.draw_slider_lever(painter, QtCore.QRect(x - 4, top, 8, track_height), value, "#f6f8fb")
+            return
+
+        slider_values = list(self.face_values.get("sliders", [50] * len(EQ10_BANDS)))
+        while len(slider_values) < len(EQ10_BANDS):
+            slider_values.append(50)
+        left = rect.left() + int(round(rect.width() * 0.13))
+        right = rect.left() + int(round(rect.width() * 0.87))
+        top = rect.top() + int(round(rect.height() * 0.25))
+        track_height = int(round(rect.height() * 0.27))
+        span = max(1, right - left)
+        for idx, value in enumerate(slider_values):
+            x = left + int(round((idx / max(1, len(slider_values) - 1)) * span))
+            self.draw_slider_lever(painter, QtCore.QRect(x - 3, top, 6, track_height), value, "#f5f8fd")
+
+        out_rect = QtCore.QRect(
+            rect.left() + int(round(rect.width() * 0.07)),
+            rect.top() + int(round(rect.height() * 0.25)),
+            9,
+            int(round(rect.height() * 0.12)),
+        )
+        gain_rect = QtCore.QRect(
+            rect.left() + int(round(rect.width() * 0.91)) - 9,
+            rect.top() + int(round(rect.height() * 0.25)),
+            9,
+            int(round(rect.height() * 0.12)),
+        )
+        self.draw_slider_lever(painter, out_rect, self.face_values.get("output", 50), "#f4f7fb")
+        self.draw_slider_lever(painter, gain_rect, self.face_values.get("gain", 50), "#f4f7fb")
+
+    def draw_rc30_face(self, painter, rect):
+        knobs = list(self.face_values.get("knobs", [50, 50, 50]))
+        while len(knobs) < 3:
+            knobs.append(50)
+        top_y = rect.top() + int(round(rect.height() * 0.20))
+        centers = [
+            QtCore.QPointF(rect.left() + rect.width() * 0.13, top_y),
+            QtCore.QPointF(rect.left() + rect.width() * 0.28, top_y),
+            QtCore.QPointF(rect.left() + rect.width() * 0.79, top_y),
+        ]
+        for center, value in zip(centers, knobs):
+            self.draw_knob(painter, center, value, radius=14)
+
+        meter_track_w = int(round(rect.width() * 0.065))
+        meter_h = int(round(rect.height() * 0.24))
+        meter_top = rect.top() + int(round(rect.height() * 0.62))
+        t1_rect = QtCore.QRect(rect.left() + int(round(rect.width() * 0.20)), meter_top, meter_track_w, meter_h)
+        t2_rect = QtCore.QRect(rect.left() + int(round(rect.width() * 0.66)), meter_top, meter_track_w, meter_h)
+        for idx, mrect in enumerate([t1_rect, t2_rect]):
+            painter.setPen(QtGui.QPen(QtGui.QColor("#16202b"), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(14, 20, 26, 210)))
+            painter.drawRoundedRect(mrect, 3, 3)
+            value = clamp(int(round(knobs[idx + 1])), 0, 100)
+            fill_h = int(round((value / 100.0) * (mrect.height() - 4)))
+            fill_rect = QtCore.QRect(mrect.left() + 2, mrect.bottom() - 2 - fill_h, mrect.width() - 4, fill_h)
+            meter_grad = QtGui.QLinearGradient(fill_rect.topLeft(), fill_rect.bottomLeft())
+            meter_grad.setColorAt(0.0, QtGui.QColor("#ffd874"))
+            meter_grad.setColorAt(1.0, QtGui.QColor("#f2534d"))
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.setBrush(QtGui.QBrush(meter_grad))
+            painter.drawRoundedRect(fill_rect, 2, 2)
+
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), QtGui.QColor(self.theme["canvas_bg"]))
+
+        glow = QtGui.QRadialGradient(self.rect().center(), max(self.width(), self.height()) * 0.55)
+        glow.setColorAt(0.0, QtGui.QColor(255, 255, 255, 24))
+        glow.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(glow))
+        painter.drawRect(self.rect())
+
+        card_w = min(260, self.width() - 36)
+        card_h = min(310, self.height() - 36)
+        card_rect = QtCore.QRect(
+            self.rect().center().x() - card_w // 2,
+            self.rect().center().y() - card_h // 2,
+            card_w,
+            card_h,
+        )
+        painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 2))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["panel"])))
+        painter.drawRoundedRect(card_rect, 14, 14)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 56), 1))
+        painter.drawRoundedRect(card_rect.adjusted(2, 2, -2, -2), 12, 12)
+
+        painter.setPen(QtGui.QColor(self.theme["group_title"]))
+        tfont = painter.font()
+        tfont.setBold(True)
+        tfont.setPointSize(max(10, tfont.pointSize() + 1))
+        painter.setFont(tfont)
+        title = PEDAL_LIBRARY.get(self.pedal_id, "Pedal")
+        painter.drawText(card_rect.adjusted(8, 10, -8, -8), QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter, title)
+
+        image_area = card_rect.adjusted(10, 34, -10, -24)
+        draw_rect = image_area
+        pixmap = self.pedal_pixmaps.get(self.pedal_id)
+        if pixmap and not pixmap.isNull():
+            scaled = pixmap.scaled(image_area.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            draw_rect = QtCore.QRect(
+                image_area.left() + (image_area.width() - scaled.width()) // 2,
+                image_area.top() + (image_area.height() - scaled.height()) // 2,
+                scaled.width(),
+                scaled.height(),
+            )
+            painter.drawPixmap(draw_rect, scaled)
+        else:
+            painter.setPen(QtGui.QPen(QtGui.QColor(self.theme["frame"]), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(self.theme["canvas_bg"])))
+            painter.drawRoundedRect(draw_rect, 8, 8)
+
+        if self.pedal_id in {"ge7", "eq10"}:
+            self.draw_eq_face(painter, draw_rect)
+        elif self.pedal_id == "rc30":
+            self.draw_rc30_face(painter, draw_rect)
+        else:
+            knobs = list(self.face_values.get("knobs", [50, 50, 50]))
+            while len(knobs) < 3:
+                knobs.append(50)
+            knob_y = draw_rect.top() + int(round(draw_rect.height() * 0.18))
+            spacing = draw_rect.width() / 4.0
+            for idx in range(3):
+                center = QtCore.QPointF(draw_rect.left() + spacing * (idx + 1), knob_y)
+                self.draw_knob(painter, center, knobs[idx], radius=14)
+
+        jack_y = draw_rect.center().y()
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor("#f2f6fc")))
+        painter.drawEllipse(QtCore.QPointF(draw_rect.left() + 8, jack_y), 4.0, 4.0)
+        painter.drawEllipse(QtCore.QPointF(draw_rect.right() - 8, jack_y), 4.0, 4.0)
+
+        painter.setPen(QtGui.QColor(self.theme["group_title"]))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(max(8, f.pointSize() - 1))
+        painter.setFont(f)
+        painter.drawText(
+            card_rect.adjusted(10, card_rect.height() - 24, -10, -2),
+            QtCore.Qt.AlignCenter,
+            "OUT  < signal flow >  IN",
+        )
+
+
 class PedalArchitectWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2173,16 +3216,20 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "theme": "dark",
             "theoryScale": "minor_pentatonic",
             "theoryShape": "g",
+            "pedalReference": BANK_ORDER[0],
             "chain": list(DEFAULT_CHAIN),
             "canvasPositions": {},
             "canvasConnections": [],
         }
         self.connected_chain = []
+        self.last_recommendation = None
         self.summary_selected_key = ""
         self.summary_best_key = "C"
         self.summary_style_chords = []
         self.summary_usual_keys = []
         self.summary_usual_major_keys = []
+        self.style_progression_cache = {}
+        self.crazy_payload_cache = {}
         self.app_config = self.load_app_config()
         self.feedback_limits_state = self.load_feedback_limiter_state()
         self.feedback_user_id = self.feedback_user_hash()
@@ -2206,16 +3253,19 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         root.addWidget(self.tabs)
 
         self.builder_tab = QtWidgets.QWidget()
+        self.pedals_tab = QtWidgets.QWidget()
         self.rig_setup_tab = QtWidgets.QWidget()
         self.theory_tab = QtWidgets.QWidget()
         self.feedback_tab = QtWidgets.QWidget()
 
+        self.tabs.addTab(self.pedals_tab, "Pedals")
         self.tabs.addTab(self.builder_tab, "Builder")
         self.tabs.addTab(self.rig_setup_tab, "Rig Setup")
         self.tabs.addTab(self.theory_tab, "Theory")
         self.tabs.addTab(self.feedback_tab, "Feedback")
 
         self.build_builder_tab()
+        self.build_pedals_tab()
         self.build_rig_setup_tab()
         self.build_theory_tab()
         self.build_feedback_tab()
@@ -2225,56 +3275,133 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def initialize_splitter_sizes(self):
         if hasattr(self, "builder_splitter"):
-            self.builder_splitter.setSizes([320, 560, 520])
+            self.builder_splitter.setSizes([360, 980])
 
     def build_global_controls(self, root_layout):
         controls = QtWidgets.QFrame()
-        controls_layout = QtWidgets.QVBoxLayout(controls)
-        controls_layout.setContentsMargins(10, 10, 10, 10)
-        controls_layout.setSpacing(8)
+        controls_layout = QtWidgets.QHBoxLayout(controls)
+        controls_layout.setContentsMargins(10, 10, 10, 8)
+        controls_layout.setSpacing(10)
+        controls_layout.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
 
-        style_row = QtWidgets.QHBoxLayout()
-        style_row.setSpacing(8)
-        style_label = QtWidgets.QLabel("Style")
-        style_label.setMinimumWidth(48)
         self.genre_combo = QtWidgets.QComboBox()
-        style_row.addWidget(style_label)
-        style_row.addWidget(self.genre_combo, 1)
-        controls_layout.addLayout(style_row)
+        self.genre_combo.setMinimumWidth(170)
+        self.genre_combo.setMaximumWidth(230)
 
-        self.guitar_type_combo = QtWidgets.QComboBox()
-        self.guitar_profile_combo = QtWidgets.QComboBox()
+        style_wrap = QtWidgets.QGroupBox("Style")
+        style_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        style_wrap.setMinimumWidth(250)
+        style_layout = QtWidgets.QVBoxLayout(style_wrap)
+        style_layout.setContentsMargins(8, 8, 8, 8)
+        style_layout.setSpacing(6)
+        style_layout.addWidget(self.genre_combo)
+
+        self.guitar_type_electric = QtWidgets.QRadioButton("Electric")
+        self.guitar_type_acoustic = QtWidgets.QRadioButton("Acoustic")
+        self.guitar_type_group = QtWidgets.QButtonGroup(self)
+        self.guitar_type_group.addButton(self.guitar_type_electric)
+        self.guitar_type_group.addButton(self.guitar_type_acoustic)
+
+        guitar_wrap = QtWidgets.QGroupBox("Guitar")
+        guitar_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        guitar_wrap.setMinimumWidth(150)
+        guitar_layout = QtWidgets.QVBoxLayout(guitar_wrap)
+        guitar_layout.setContentsMargins(8, 8, 8, 8)
+        guitar_layout.setSpacing(6)
+        guitar_layout.addWidget(self.guitar_type_electric)
+        guitar_layout.addWidget(self.guitar_type_acoustic)
+        guitar_layout.addStretch(1)
+
+        self.guitar_controls_stack = QtWidgets.QStackedWidget()
+        electric_controls_page = QtWidgets.QWidget()
+        electric_controls_layout = QtWidgets.QVBoxLayout(electric_controls_page)
+        electric_controls_layout.setContentsMargins(0, 0, 0, 0)
+        electric_controls_layout.setSpacing(6)
+        self.profile_electric_2 = QtWidgets.QRadioButton("2 knob electric")
+        self.profile_electric_4 = QtWidgets.QRadioButton("4 knob electric")
+        self.profile_electric_2.setProperty("profileKey", "electric_2_knob_toggle")
+        self.profile_electric_4.setProperty("profileKey", "electric_4_knob_toggle")
+        self.electric_profile_group = QtWidgets.QButtonGroup(self)
+        self.electric_profile_group.addButton(self.profile_electric_2)
+        self.electric_profile_group.addButton(self.profile_electric_4)
+        electric_controls_layout.addWidget(self.profile_electric_2)
+        electric_controls_layout.addWidget(self.profile_electric_4)
+
+        acoustic_controls_page = QtWidgets.QWidget()
+        acoustic_controls_layout = QtWidgets.QVBoxLayout(acoustic_controls_page)
+        acoustic_controls_layout.setContentsMargins(0, 0, 0, 0)
+        acoustic_controls_layout.setSpacing(6)
+        self.acoustic_controls_text = QtWidgets.QLineEdit("Acoustic (Taylor ES2)")
+        self.acoustic_controls_text.setReadOnly(True)
+        self.acoustic_controls_text.setMinimumWidth(260)
+        self.acoustic_controls_text.setMaximumWidth(320)
+        acoustic_controls_layout.addWidget(self.acoustic_controls_text)
+
+        self.guitar_controls_stack.addWidget(electric_controls_page)
+        self.guitar_controls_stack.addWidget(acoustic_controls_page)
+        self.guitar_controls_stack.setMinimumWidth(280)
+        self.guitar_controls_stack.setMaximumWidth(420)
+        self.guitar_controls_stack.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+
+        controls_wrap = QtWidgets.QGroupBox("Guitar Controls")
+        controls_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        controls_wrap.setMinimumWidth(320)
+        controls_sub_layout = QtWidgets.QVBoxLayout(controls_wrap)
+        controls_sub_layout.setContentsMargins(8, 8, 8, 8)
+        controls_sub_layout.setSpacing(6)
+        controls_sub_layout.addWidget(self.guitar_controls_stack)
+
         self.amp_combo = QtWidgets.QComboBox()
+        self.amp_combo.setMinimumWidth(220)
+        self.amp_combo.setMaximumWidth(260)
+        amp_wrap = QtWidgets.QGroupBox("Amp")
+        amp_wrap.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        amp_wrap.setMinimumWidth(280)
+        amp_layout = QtWidgets.QVBoxLayout(amp_wrap)
+        amp_layout.setContentsMargins(8, 8, 8, 8)
+        amp_layout.setSpacing(6)
+        amp_layout.addWidget(self.amp_combo)
+
         self.font_size_combo = QtWidgets.QComboBox()
         self.theme_combo = QtWidgets.QComboBox()
         self.font_size_combo.setView(QtWidgets.QListView())
 
-        dropdown_row = QtWidgets.QHBoxLayout()
-        dropdown_row.setSpacing(10)
-        self.add_control_column(dropdown_row, "Guitar", self.guitar_type_combo)
-        self.add_control_column(dropdown_row, "Guitar Controls", self.guitar_profile_combo)
-        self.add_control_column(dropdown_row, "Amp", self.amp_combo)
-        self.add_control_column(dropdown_row, "Font Size", self.font_size_combo)
-        self.add_control_column(dropdown_row, "Color Scheme", self.theme_combo)
-        controls_layout.addLayout(dropdown_row)
-
         self.optimize_btn = QtWidgets.QPushButton("Optimize For Me")
-        self.clean_up_btn = QtWidgets.QPushButton("Clean Up Layout")
-        self.auto_wire_btn = QtWidgets.QPushButton("Auto Wire")
-        self.clear_cables_btn = QtWidgets.QPushButton("Clear Cables")
-        self.reset_btn = QtWidgets.QPushButton("Reset Chain")
+        self.optimize_btn.setMinimumWidth(150)
         self.save_btn = QtWidgets.QPushButton("Save Offline")
+        self.settings_btn = QtWidgets.QToolButton()
+        self.settings_btn.setText("⚙")
+        self.settings_btn.setToolTip("Settings")
+        self.settings_btn.setFixedSize(34, 34)
+        self.settings_btn.setAutoRaise(False)
 
-        action_row = QtWidgets.QHBoxLayout()
-        action_row.setSpacing(10)
-        action_row.addWidget(self.optimize_btn)
-        action_row.addWidget(self.clean_up_btn)
-        action_row.addWidget(self.auto_wire_btn)
-        action_row.addWidget(self.clear_cables_btn)
-        action_row.addWidget(self.reset_btn)
-        action_row.addStretch(1)
-        action_row.addWidget(self.save_btn)
-        controls_layout.addLayout(action_row)
+        self.settings_dialog = QtWidgets.QDialog(self)
+        self.settings_dialog.setWindowTitle("Settings")
+        self.settings_dialog.setModal(False)
+        settings_layout = QtWidgets.QVBoxLayout(self.settings_dialog)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
+        settings_layout.setSpacing(8)
+        settings_form = QtWidgets.QFormLayout()
+        settings_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        settings_form.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        settings_form.addRow("Font Size", self.font_size_combo)
+        settings_form.addRow("Color Scheme", self.theme_combo)
+        settings_layout.addLayout(settings_form)
+        settings_close_row = QtWidgets.QHBoxLayout()
+        settings_close_row.addStretch(1)
+        settings_close_btn = QtWidgets.QPushButton("Close")
+        settings_close_btn.clicked.connect(self.settings_dialog.hide)
+        settings_close_row.addWidget(settings_close_btn)
+        settings_layout.addLayout(settings_close_row)
+
+        controls_layout.addWidget(style_wrap, 0, QtCore.Qt.AlignTop)
+        controls_layout.addWidget(guitar_wrap, 0, QtCore.Qt.AlignTop)
+        controls_layout.addWidget(controls_wrap, 0, QtCore.Qt.AlignTop)
+        controls_layout.addWidget(amp_wrap, 0, QtCore.Qt.AlignTop)
+        controls_layout.addStretch(1)
+        controls_layout.addWidget(self.optimize_btn)
+        controls_layout.addWidget(self.save_btn)
+        controls_layout.addWidget(self.settings_btn)
 
         root_layout.addWidget(controls)
 
@@ -2317,43 +3444,96 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         board_layout.addWidget(self.chain_score)
         board_layout.addWidget(self.chain_summary)
 
-        right_group = QtWidgets.QGroupBox("Guitar + Amp")
-        right_layout = QtWidgets.QVBoxLayout(right_group)
-        self.guitar_preview = QtWidgets.QTextEdit()
-        self.guitar_preview.setReadOnly(True)
-        self.guitar_preview.setPlaceholderText("Guitar controls preview")
-        self.guitar_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.amp_preview = QtWidgets.QTextEdit()
-        self.amp_preview.setReadOnly(True)
-        self.amp_preview.setPlaceholderText("Amp settings preview")
-        self.amp_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.playbook_preview = QtWidgets.QTextEdit()
-        self.playbook_preview.setReadOnly(True)
-        self.playbook_preview.setPlaceholderText("Style progression + solo guide")
-        self.playbook_preview.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        right_layout.addWidget(QtWidgets.QLabel("Guitar View"))
-        right_layout.addWidget(self.guitar_preview, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Amp (Chain End)"))
-        right_layout.addWidget(self.amp_preview, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Style Playbook"))
-        right_layout.addWidget(self.playbook_preview, 2)
-
-        for panel in [bank_group, board_group, right_group]:
+        for panel in [bank_group, board_group]:
             panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         self.builder_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.builder_splitter.addWidget(bank_group)
         self.builder_splitter.addWidget(board_group)
-        self.builder_splitter.addWidget(right_group)
         self.builder_splitter.setChildrenCollapsible(False)
-        self.builder_splitter.setStretchFactor(0, 2)
-        self.builder_splitter.setStretchFactor(1, 4)
-        self.builder_splitter.setStretchFactor(2, 4)
+        self.builder_splitter.setStretchFactor(0, 3)
+        self.builder_splitter.setStretchFactor(1, 7)
         layout.addWidget(self.builder_splitter, 1)
+
+        self.clean_up_btn = QtWidgets.QPushButton("Clean Up Layout")
+        self.auto_wire_btn = QtWidgets.QPushButton("Auto Wire")
+        self.clear_cables_btn = QtWidgets.QPushButton("Clear Cables")
+        self.reset_btn = QtWidgets.QPushButton("Reset Chain")
+        builder_actions = QtWidgets.QHBoxLayout()
+        builder_actions.setSpacing(8)
+        builder_actions.addWidget(self.clean_up_btn)
+        builder_actions.addWidget(self.auto_wire_btn)
+        builder_actions.addWidget(self.clear_cables_btn)
+        builder_actions.addWidget(self.reset_btn)
+        builder_actions.addStretch(1)
+        layout.addLayout(builder_actions)
+
+    def build_pedals_tab(self):
+        layout = QtWidgets.QVBoxLayout(self.pedals_tab)
+        layout.setSpacing(10)
+
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        selector_group = QtWidgets.QGroupBox("Pedal Selector")
+        selector_layout = QtWidgets.QVBoxLayout(selector_group)
+        selector_hint = QtWidgets.QLabel("Select a pedal to inspect behavior, setup strategy, and advanced options.")
+        selector_hint.setWordWrap(True)
+        selector_layout.addWidget(selector_hint)
+        self.pedal_selector_list = QtWidgets.QListWidget()
+        self.pedal_selector_list.setAlternatingRowColors(True)
+        self.pedal_selector_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        for pedal_id in BANK_ORDER:
+            item = QtWidgets.QListWidgetItem(PEDAL_LIBRARY[pedal_id])
+            item.setData(QtCore.Qt.UserRole, pedal_id)
+            base = QtGui.QColor(PEDAL_COLORS.get(pedal_id, "#b0b0b0"))
+            item.setBackground(base.lighter(115))
+            item.setForeground(QtGui.QColor(PEDAL_TEXT_COLORS.get(pedal_id, "#11171f")))
+            self.pedal_selector_list.addItem(item)
+        selector_layout.addWidget(self.pedal_selector_list, 1)
+        splitter.addWidget(selector_group)
+
+        visual_group = QtWidgets.QGroupBox("Pedal Visual")
+        visual_layout = QtWidgets.QVBoxLayout(visual_group)
+        self.pedal_showcase = PedalShowcaseWidget()
+        self.pedal_visual_hint = QtWidgets.QLabel("Visual pointer/levers update from current style and rig recommendation.")
+        self.pedal_visual_hint.setWordWrap(True)
+        visual_layout.addWidget(self.pedal_showcase, 1)
+        visual_layout.addWidget(self.pedal_visual_hint)
+        splitter.addWidget(visual_group)
+
+        details_group = QtWidgets.QGroupBox("Pedal Guide")
+        details_layout = QtWidgets.QVBoxLayout(details_group)
+        self.pedal_details_text = QtWidgets.QTextEdit()
+        self.pedal_details_text.setReadOnly(True)
+        details_layout.addWidget(self.pedal_details_text, 1)
+        splitter.addWidget(details_group)
+
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 4)
+        layout.addWidget(splitter, 1)
+
+        self.pedal_selector_list.currentItemChanged.connect(self.on_pedal_reference_changed)
+        selected = self.state.get("pedalReference", BANK_ORDER[0])
+        selected_row = 0
+        for idx in range(self.pedal_selector_list.count()):
+            if self.pedal_selector_list.item(idx).data(QtCore.Qt.UserRole) == selected:
+                selected_row = idx
+                break
+        self.pedal_selector_list.setCurrentRow(selected_row)
 
     def build_rig_setup_tab(self):
         layout = QtWidgets.QVBoxLayout(self.rig_setup_tab)
         layout.setSpacing(10)
+
+        overview_row = QtWidgets.QHBoxLayout()
+        overview_row.setSpacing(10)
+        guitar_preview_group, self.guitar_preview = self.make_info_panel("Guitar")
+        amp_preview_group, self.amp_preview = self.make_info_panel("Amp")
+        overview_row.addWidget(guitar_preview_group, 1)
+        overview_row.addWidget(amp_preview_group, 1)
+        layout.addLayout(overview_row, 2)
 
         pedals_group = QtWidgets.QGroupBox("Pedal Settings")
         pedals_layout = QtWidgets.QVBoxLayout(pedals_group)
@@ -2431,14 +3611,24 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         pentatonic_layout = QtWidgets.QVBoxLayout(pentatonic_group)
         top_controls = QtWidgets.QHBoxLayout()
         top_controls.setSpacing(8)
-        top_controls.addWidget(QtWidgets.QLabel("Scale"))
+        scale_label = QtWidgets.QLabel("Scale")
+        scale_font = QtGui.QFont(scale_label.font())
+        scale_font.setBold(True)
+        scale_label.setFont(scale_font)
+        top_controls.addWidget(scale_label)
         self.scale_type_combo = QtWidgets.QComboBox()
+        self.scale_type_combo.setMinimumHeight(36)
         for scale_key in ["minor_pentatonic", "major_pentatonic", "minor_blues", "major_scale", "natural_minor", "mixolydian"]:
             self.scale_type_combo.addItem(SCALE_LIBRARY[scale_key]["label"], scale_key)
         self.set_combo_by_data(self.scale_type_combo, self.state.get("theoryScale", "minor_pentatonic"))
         top_controls.addWidget(self.scale_type_combo, 1)
-        top_controls.addWidget(QtWidgets.QLabel("CAGED Shape"))
+        shape_label = QtWidgets.QLabel("CAGED Shape")
+        shape_font = QtGui.QFont(shape_label.font())
+        shape_font.setBold(True)
+        shape_label.setFont(shape_font)
+        top_controls.addWidget(shape_label)
         self.pentatonic_shape_combo = QtWidgets.QComboBox()
+        self.pentatonic_shape_combo.setMinimumHeight(36)
         for shape_key in ["c", "a", "g", "e", "d"]:
             self.pentatonic_shape_combo.addItem(CAGED_SHAPES[shape_key]["label"], shape_key)
         self.set_combo_by_data(self.pentatonic_shape_combo, self.state.get("theoryShape", "g"))
@@ -2458,10 +3648,42 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         analysis_row.addWidget(pentatonic_group, 2)
 
         layout.addLayout(analysis_row, 1)
+
+        playbook_row = QtWidgets.QHBoxLayout()
+        playbook_row.setSpacing(10)
+
+        playbook_group = QtWidgets.QGroupBox("Style Playbook")
+        playbook_layout = QtWidgets.QVBoxLayout(playbook_group)
+        self.playbook_preview = QtWidgets.QTextEdit()
+        self.playbook_preview.setReadOnly(True)
+        self.playbook_preview.setMinimumHeight(180)
+        playbook_layout.addWidget(self.playbook_preview)
+        playbook_row.addWidget(playbook_group, 1)
+
+        crazy_group = QtWidgets.QGroupBox("Creative Theory")
+        crazy_layout = QtWidgets.QVBoxLayout(crazy_group)
+        self.crazy_btn = QtWidgets.QPushButton("Lets get Crazy")
+        self.crazy_btn.setMinimumHeight(34)
+        crazy_layout.addWidget(self.crazy_btn, 0, QtCore.Qt.AlignLeft)
+        crazy_content_row = QtWidgets.QHBoxLayout()
+        crazy_content_row.setSpacing(8)
+        self.crazy_progression_text = QtWidgets.QTextEdit()
+        self.crazy_progression_text.setReadOnly(True)
+        self.crazy_progression_text.setMinimumHeight(140)
+        self.crazy_scale_text = QtWidgets.QTextEdit()
+        self.crazy_scale_text.setReadOnly(True)
+        self.crazy_scale_text.setMinimumHeight(140)
+        crazy_content_row.addWidget(self.crazy_progression_text, 1)
+        crazy_content_row.addWidget(self.crazy_scale_text, 1)
+        crazy_layout.addLayout(crazy_content_row, 1)
+        playbook_row.addWidget(crazy_group, 1)
+        layout.addLayout(playbook_row, 0)
+
         self.populate_nashville_table()
         self.nashville_table.itemSelectionChanged.connect(self.on_nashville_selection_changed)
         self.pentatonic_shape_combo.currentIndexChanged.connect(self.on_pentatonic_shape_changed)
         self.scale_type_combo.currentIndexChanged.connect(self.on_scale_type_changed)
+        self.crazy_btn.clicked.connect(self.on_lets_get_crazy)
 
     def build_feedback_tab(self):
         layout = QtWidgets.QVBoxLayout(self.feedback_tab)
@@ -2781,11 +4003,14 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
 
     def bind_builder_events(self):
         self.genre_combo.currentIndexChanged.connect(self.on_controls_changed)
-        self.guitar_type_combo.currentIndexChanged.connect(self.on_controls_changed)
-        self.guitar_profile_combo.currentIndexChanged.connect(self.on_controls_changed)
+        self.guitar_type_electric.toggled.connect(self.on_controls_changed)
+        self.guitar_type_acoustic.toggled.connect(self.on_controls_changed)
+        self.profile_electric_2.toggled.connect(self.on_controls_changed)
+        self.profile_electric_4.toggled.connect(self.on_controls_changed)
         self.amp_combo.currentIndexChanged.connect(self.on_controls_changed)
         self.font_size_combo.currentIndexChanged.connect(self.on_font_preset_changed)
         self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
+        self.settings_btn.clicked.connect(self.open_settings_dialog)
 
         self.optimize_btn.clicked.connect(self.optimize_chain)
         self.clean_up_btn.clicked.connect(self.clean_up_layout)
@@ -2813,15 +4038,6 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         for genre_key, preset in GENRE_PRESETS.items():
             self.genre_combo.addItem(preset["label"], genre_key)
 
-        self.guitar_type_combo.clear()
-        self.guitar_type_combo.addItem("Electric", "electric")
-        self.guitar_type_combo.addItem("Acoustic", "acoustic")
-
-        self.guitar_profile_combo.clear()
-        for profile_key, profile in GUITAR_PROFILES.items():
-            text = f"{profile['label']} ({'Acoustic' if profile['type'] == 'acoustic' else 'Electric'})"
-            self.guitar_profile_combo.addItem(text, profile_key)
-
         self.amp_combo.clear()
         self.amp_combo.addItem("Auto (Best Match)", "auto")
         for amp_key, amp in AMP_MODELS.items():
@@ -2840,13 +4056,26 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.font_size_combo.setItemData(row, sample_font, QtCore.Qt.FontRole)
 
         self.set_combo_by_data(self.genre_combo, self.state["genre"])
-        self.set_combo_by_data(self.guitar_type_combo, self.state["guitarType"])
-        self.set_combo_by_data(self.guitar_profile_combo, self.state["guitarProfile"])
         self.set_combo_by_data(self.amp_combo, self.state["ampModel"])
         if not self.set_combo_by_data(self.theme_combo, self.state.get("theme", "dark")):
             self.set_combo_by_data(self.theme_combo, "dark")
         if not self.set_combo_by_data(self.font_size_combo, self.state.get("fontPreset", "medium")):
             self.set_combo_by_data(self.font_size_combo, "medium")
+
+        guitar_type = self.state.get("guitarType", "electric")
+        if guitar_type == "acoustic":
+            self.guitar_type_acoustic.setChecked(True)
+        else:
+            self.guitar_type_electric.setChecked(True)
+
+        profile_key = self.state.get("guitarProfile", AUTO_GUITAR_PROFILE_BY_TYPE.get(guitar_type, "electric_2_knob_toggle"))
+        if guitar_type == "acoustic":
+            self.state["guitarProfile"] = "taylor_acoustic"
+        elif profile_key == "electric_4_knob_toggle":
+            self.profile_electric_4.setChecked(True)
+        else:
+            self.profile_electric_2.setChecked(True)
+        self.update_guitar_controls_mode()
 
         self._loading_ui = False
 
@@ -2857,24 +4086,64 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
                 return True
         return False
 
+    def update_guitar_controls_mode(self):
+        is_acoustic = self.guitar_type_acoustic.isChecked()
+        self.guitar_controls_stack.setCurrentIndex(1 if is_acoustic else 0)
+        self.profile_electric_2.setEnabled(not is_acoustic)
+        self.profile_electric_4.setEnabled(not is_acoustic)
+        self.update_control_box_geometry()
+
+    def update_control_box_geometry(self):
+        if not hasattr(self, "guitar_controls_stack"):
+            return
+        metrics = QtGui.QFontMetrics(self.font())
+        acoustic_text_width = metrics.horizontalAdvance("Acoustic (Taylor ES2)") + 28
+        electric_text_width = max(
+            metrics.horizontalAdvance("2 knob electric"),
+            metrics.horizontalAdvance("4 knob electric"),
+        ) + 34
+        stack_width = clamp(max(acoustic_text_width, electric_text_width, 280), 280, 420)
+        self.guitar_controls_stack.setFixedWidth(stack_width)
+        field_width = clamp(stack_width - 18, 260, 400)
+        if hasattr(self, "acoustic_controls_text"):
+            self.acoustic_controls_text.setMinimumWidth(field_width)
+            self.acoustic_controls_text.setMaximumWidth(field_width)
+        h_electric = self.profile_electric_2.sizeHint().height() + self.profile_electric_4.sizeHint().height() + 10
+        h_acoustic = self.acoustic_controls_text.sizeHint().height() + 10 if hasattr(self, "acoustic_controls_text") else h_electric
+        self.guitar_controls_stack.setFixedHeight(max(h_electric, h_acoustic, 48))
+
+    def selected_profile_key(self):
+        if self.guitar_type_acoustic.isChecked():
+            return "taylor_acoustic"
+        if self.profile_electric_4.isChecked():
+            return "electric_4_knob_toggle"
+        return "electric_2_knob_toggle"
+
+    def open_settings_dialog(self):
+        if not hasattr(self, "settings_dialog"):
+            return
+        self.settings_dialog.adjustSize()
+        anchor = self.settings_btn.mapToGlobal(QtCore.QPoint(self.settings_btn.width(), self.settings_btn.height()))
+        self.settings_dialog.move(anchor.x() - self.settings_dialog.width(), anchor.y() + 4)
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+
     def on_controls_changed(self):
         if self._loading_ui:
             return
 
+        previous_genre = self.state.get("genre", "rock")
         self.state["genre"] = self.genre_combo.currentData()
-        self.state["guitarType"] = self.guitar_type_combo.currentData()
-
-        profile_key = self.guitar_profile_combo.currentData()
-        profile = GUITAR_PROFILES.get(profile_key)
-        if profile and profile["type"] == self.state["guitarType"]:
-            self.state["guitarProfile"] = profile_key
-        else:
-            self.state["guitarProfile"] = AUTO_GUITAR_PROFILE_BY_TYPE[self.state["guitarType"]]
-            self._loading_ui = True
-            self.set_combo_by_data(self.guitar_profile_combo, self.state["guitarProfile"])
-            self._loading_ui = False
+        self.state["guitarType"] = "acoustic" if self.guitar_type_acoustic.isChecked() else "electric"
+        self.state["guitarProfile"] = self.selected_profile_key()
+        self.update_guitar_controls_mode()
 
         self.state["ampModel"] = self.amp_combo.currentData()
+
+        if self.state["genre"] != previous_genre:
+            self.clear_style_progression_cache(self.state["genre"])
+            self.clear_crazy_payload_cache(self.state["genre"])
 
         self.render_all()
         self.persist_state(silent=True)
@@ -3354,11 +4623,17 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.clean_up_layout()
         self.render_all()
         self.persist_state(silent=True)
-        QtWidgets.QMessageBox.information(
-            self,
-            "Optimize",
-            f"{preset['label']} optimized ({analysis['permutations_checked']:,} layouts checked).",
-        )
+        message = f"{preset['label']} optimized ({analysis['permutations_checked']:,} layouts checked)."
+        outside_builder = hasattr(self, "tabs") and self.tabs.currentWidget() is not self.builder_tab
+        if outside_builder:
+            dialog = QtWidgets.QMessageBox(self)
+            dialog.setWindowTitle("Optimize")
+            dialog.setText(message)
+            dialog.setInformativeText("Build order preview shown for the optimized chain.")
+            dialog.setIconPixmap(self.build_chain_preview_pixmap(self.state["chain"]))
+            dialog.exec_()
+        else:
+            QtWidgets.QMessageBox.information(self, "Optimize", message)
 
     def reset_chain(self):
         self.state["chain"] = list(DEFAULT_CHAIN)
@@ -3380,6 +4655,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.state["ampModel"],
             self.state["guitarProfile"],
         )
+        self.last_recommendation = recommendation
 
         self.update_bank_list()
         self.update_chain_list()
@@ -3405,9 +4681,61 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.chain_summary.setText(f"Connected chain: {connected_text}\nActive pedals: {active_text}")
 
         self.render_builder_preview(recommendation)
+        self.render_pedals_tab(recommendation)
         self.render_rig_setup_tab(recommendation)
         self.render_summary_tab(recommendation)
         self.render_feedback_tab()
+
+    def build_chain_preview_pixmap(self, chain):
+        safe_chain = [pid for pid in chain if pid in PEDAL_LIBRARY]
+        nodes = [("GTR", "#d2d6dc", "#1a1f28")]
+        for pedal_id in safe_chain:
+            color = PEDAL_COLORS.get(pedal_id, "#b0b7c5")
+            text_color = PEDAL_TEXT_COLORS.get(pedal_id, "#121720")
+            nodes.append((PEDAL_LIBRARY[pedal_id].replace("BOSS ", ""), color, text_color))
+        amp_color = AMP_BRAND_COLORS.get(self.last_recommendation.get("amp_model_key", ""), {"bg": "#323a45", "fg": "#f2f4f7"}) if self.last_recommendation else {"bg": "#323a45", "fg": "#f2f4f7"}
+        nodes.append(("AMP", amp_color["bg"], amp_color["fg"]))
+
+        cell_w = 78
+        cell_h = 38
+        gap = 20
+        width = max(180, 18 + len(nodes) * cell_w + max(0, len(nodes) - 1) * gap + 12)
+        height = 72
+        pixmap = QtGui.QPixmap(width, height)
+        pixmap.fill(QtGui.QColor(0, 0, 0, 0))
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        x = 12
+        y = 17
+        for idx, (label, bg, fg) in enumerate(nodes):
+            rect = QtCore.QRect(x, y, cell_w, cell_h)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#1a1f28"), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(bg)))
+            painter.drawRoundedRect(rect, 7, 7)
+            painter.setPen(QtGui.QColor(fg))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(max(7, font.pointSize() - 1))
+            painter.setFont(font)
+            painter.drawText(rect.adjusted(4, 2, -4, -2), QtCore.Qt.AlignCenter, label)
+            if idx < len(nodes) - 1:
+                x1 = rect.right() + 2
+                x2 = x1 + gap - 6
+                mid_y = rect.center().y()
+                painter.setPen(QtGui.QPen(QtGui.QColor("#6fa9ff"), 2))
+                painter.drawLine(x1, mid_y, x2, mid_y)
+                arrow = QtGui.QPolygon(
+                    [
+                        QtCore.QPoint(x2, mid_y),
+                        QtCore.QPoint(x2 - 5, mid_y - 4),
+                        QtCore.QPoint(x2 - 5, mid_y + 4),
+                    ]
+                )
+                painter.setBrush(QtGui.QBrush(QtGui.QColor("#6fa9ff")))
+                painter.drawPolygon(arrow)
+            x += cell_w + gap
+        painter.end()
+        return pixmap
 
     def render_builder_preview(self, recommendation):
         guitar = recommendation.get("guitar")
@@ -3435,20 +4763,249 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         ]
         self.amp_preview.setPlainText("\n".join(amp_lines))
 
-        playbook = STYLE_PLAYBOOK.get(self.state["genre"], STYLE_PLAYBOOK["rock"])
-        pb_lines = [
-            "Heard Chords:",
-            *[f"- {line}" for line in playbook.get("concertProgression", [])],
-            "",
-            "Play These Shapes (Capo 5):",
-            *[f"- {line}" for line in playbook.get("capo5Shapes", [])],
-            "",
-            f"Open Shapes: {', '.join(playbook.get('openShapes', []))}",
-            f"Capo Mapping: {playbook.get('capoGuide', '')}",
-            f"G-Shape Pentatonic Fret: {playbook.get('pentatonicFret', '')}",
-            f"Solo Guide: {playbook.get('soloGuide', '')}",
+        self.render_theory_playbook()
+
+    def clear_style_progression_cache(self, genre_key=None):
+        if genre_key:
+            self.style_progression_cache.pop(genre_key, None)
+            return
+        self.style_progression_cache.clear()
+
+    def current_style_progressions(self, genre_key):
+        if genre_key in self.style_progression_cache:
+            return self.style_progression_cache[genre_key]
+        random_set = sample_style_progressions(genre_key, count=2)
+        popular_pick = sample_popular_progression(genre_key)
+        payload = {
+            "random_set": random_set,
+            "popular_pick": popular_pick,
+        }
+        self.style_progression_cache[genre_key] = payload
+        return payload
+
+    def render_theory_playbook(self):
+        if not hasattr(self, "playbook_preview"):
+            return
+        genre_key = self.state.get("genre", "rock")
+        playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+        picks = self.current_style_progressions(genre_key)
+        random_set = picks.get("random_set", [])
+        popular_pick = picks.get("popular_pick", "")
+        if len(random_set) < 2:
+            fallback = sample_style_progressions(genre_key, count=2)
+            for item in fallback:
+                if item not in random_set:
+                    random_set.append(item)
+                if len(random_set) >= 2:
+                    break
+        lines = [
+            "Random Progressions (refreshes when style changes):",
         ]
-        self.playbook_preview.setPlainText("\n".join(pb_lines))
+        if random_set:
+            lines.extend([f"- {idx}. {prog}" for idx, prog in enumerate(random_set[:2], start=1)])
+        else:
+            lines.append("- (no progression data)")
+        lines.extend(
+            [
+                "",
+                "Popular Progression (top-3 list):",
+                f"- {popular_pick or '(no popular progression configured)'}",
+                "",
+                "Capo 5 Shapes:",
+            ]
+        )
+        lines.extend(f"- {line}" for line in playbook.get("capo5Shapes", []))
+        lines.extend(
+            [
+                "",
+                f"Open Shapes: {', '.join(playbook.get('openShapes', []))}",
+                f"Capo Mapping: {playbook.get('capoGuide', '')}",
+                f"G-Shape Pentatonic Fret: {playbook.get('pentatonicFret', '')}",
+                f"Solo Guide: {playbook.get('soloGuide', '')}",
+            ]
+        )
+        self.playbook_preview.setPlainText("\n".join(lines))
+        self.render_crazy_payload()
+
+    def clear_crazy_payload_cache(self, genre_key=None):
+        if genre_key:
+            self.crazy_payload_cache.pop(genre_key, None)
+            return
+        self.crazy_payload_cache.clear()
+
+    def progression_key_center(self, progression):
+        tokens = split_progression_tokens(progression)
+        if not tokens:
+            return "C"
+        first = parse_chord_token(tokens[0])
+        if first and first.get("root") in NOTE_TO_PITCH_CLASS:
+            return first["root"]
+        return determine_best_nashville_key(tokens)
+
+    def progression_capo_shapes(self, progression, capo_fret=5):
+        shapes = [transpose_chord_root_for_capo(token, capo_fret) for token in split_progression_tokens(progression)]
+        return " - ".join([token for token in shapes if token])
+
+    def make_crazy_payload(self, genre_key):
+        playbook = STYLE_PLAYBOOK.get(genre_key, STYLE_PLAYBOOK["rock"])
+        pool = [item for item in playbook.get("progressionPool", []) if isinstance(item, str) and item.strip()]
+        popular = [item for item in playbook.get("popularTop3", []) if isinstance(item, str) and item.strip()]
+        under_used = [item for item in pool if item not in popular]
+        candidates = under_used if under_used else (pool if pool else [sample_popular_progression(genre_key)])
+        progression = random.choice([item for item in candidates if item] or ["C - Am - F - G"])
+        capo_shapes = self.progression_capo_shapes(progression, 5)
+        key_center = self.progression_key_center(progression)
+        scale_keys = CRAZY_SCALE_BY_GENRE.get(genre_key, list(CRAZY_SCALE_LIBRARY.keys()))
+        scale_key = random.choice(scale_keys if scale_keys else list(CRAZY_SCALE_LIBRARY.keys()))
+        scale = CRAZY_SCALE_LIBRARY.get(scale_key, CRAZY_SCALE_LIBRARY["harmonic_minor"])
+        root_pc = NOTE_TO_PITCH_CLASS.get(key_center, NOTE_TO_PITCH_CLASS["C"])
+        notes = [display_note_for_pitch_class((root_pc + interval) % 12, key_center) for interval in scale["intervals"]]
+        return {
+            "progression": progression,
+            "capo_shapes": capo_shapes,
+            "key_center": key_center,
+            "scale_name": scale["name"],
+            "scale_formula": scale["formula"],
+            "scale_notes": notes,
+            "scale_why": scale["why"],
+        }
+
+    def current_crazy_payload(self, genre_key):
+        if genre_key in self.crazy_payload_cache:
+            return self.crazy_payload_cache[genre_key]
+        payload = self.make_crazy_payload(genre_key)
+        self.crazy_payload_cache[genre_key] = payload
+        return payload
+
+    def render_crazy_payload(self):
+        if not hasattr(self, "crazy_progression_text") or not hasattr(self, "crazy_scale_text"):
+            return
+        genre_key = self.state.get("genre", "rock")
+        payload = self.current_crazy_payload(genre_key)
+        left_lines = [
+            "Under-utilized Progression:",
+            f"- {payload.get('progression', '')}",
+            "",
+            "Capo 5 Shape Mapping:",
+            f"- {payload.get('capo_shapes', '')}",
+            "",
+            f"Key Center Guess: {payload.get('key_center', 'C')}",
+        ]
+        right_lines = [
+            "Unusual But Correct Scale:",
+            f"- {payload.get('scale_name', '')}",
+            f"- Formula: {payload.get('scale_formula', '')}",
+            f"- Notes: {', '.join(payload.get('scale_notes', []))}",
+            "",
+            payload.get("scale_why", ""),
+        ]
+        self.crazy_progression_text.setPlainText("\n".join(left_lines))
+        self.crazy_scale_text.setPlainText("\n".join(right_lines))
+
+    def on_lets_get_crazy(self):
+        genre_key = self.state.get("genre", "rock")
+        self.crazy_payload_cache[genre_key] = self.make_crazy_payload(genre_key)
+        self.render_crazy_payload()
+
+    def current_pedal_reference_id(self):
+        if not hasattr(self, "pedal_selector_list"):
+            return BANK_ORDER[0]
+        item = self.pedal_selector_list.currentItem()
+        if not item:
+            fallback = self.state.get("pedalReference", BANK_ORDER[0])
+            return fallback if fallback in PEDAL_LIBRARY else BANK_ORDER[0]
+        pedal_id = item.data(QtCore.Qt.UserRole)
+        return pedal_id if pedal_id in PEDAL_LIBRARY else BANK_ORDER[0]
+
+    def build_pedal_reference_text(self, pedal_id, recommendation):
+        info = PEDAL_REFERENCE.get(pedal_id, {})
+        settings = recommendation["pedals"].get(pedal_id, {})
+        lines = [info.get("name", PEDAL_LIBRARY.get(pedal_id, pedal_id))]
+
+        summary = info.get("summary", "")
+        if summary:
+            lines.extend(["", "What It Does", f"- {summary}"])
+
+        controls = list(info.get("controls", []))
+        if controls:
+            lines.append("")
+            lines.append("Controls")
+            for entry in controls:
+                lines.append(f"- {entry}")
+
+        configure = list(info.get("configure", []))
+        if configure:
+            lines.append("")
+            lines.append("How To Configure")
+            for entry in configure:
+                lines.append(f"- {entry}")
+
+        possibilities = list(info.get("possibilities", []))
+        if possibilities:
+            lines.append("")
+            lines.append("Possibilities")
+            for entry in possibilities:
+                lines.append(f"- {entry}")
+
+        placement = list(info.get("placement", []))
+        if placement:
+            lines.append("")
+            lines.append("Placement Options")
+            for entry in placement:
+                lines.append(f"- {entry}")
+
+        advanced = list(info.get("advanced", []))
+        if advanced:
+            lines.append("")
+            lines.append("Advanced Workflow")
+            for entry in advanced:
+                lines.append(f"- {entry}")
+
+        lines.append("")
+        lines.append("Current Suggested Settings (from active style + chain)")
+        block = self.format_pedal_block(pedal_id, settings).splitlines()
+        for row in block[1:] if len(block) > 1 else []:
+            lines.append(row)
+        if len(block) <= 1:
+            lines.append("- Add this pedal to your connected chain to get active values.")
+
+        if pedal_id in self.connected_chain:
+            idx = self.connected_chain.index(pedal_id) + 1
+            lines.append("")
+            lines.append(f"Connected Position: {idx} / {len(self.connected_chain)} in active signal path.")
+        else:
+            lines.append("")
+            lines.append("Connected Position: Not currently in the active guitar-to-amp path.")
+
+        return "\n".join(lines)
+
+    def render_pedals_tab(self, recommendation):
+        if not hasattr(self, "pedal_selector_list"):
+            return
+        pedal_id = self.current_pedal_reference_id()
+        self.state["pedalReference"] = pedal_id
+        settings = recommendation["pedals"].get(pedal_id, {})
+        face_values = pedal_knob_values(pedal_id, settings)
+        if hasattr(self, "pedal_showcase"):
+            self.pedal_showcase.set_pedal(pedal_id, face_values)
+        if hasattr(self, "pedal_details_text"):
+            self.pedal_details_text.setPlainText(self.build_pedal_reference_text(pedal_id, recommendation))
+
+    def on_pedal_reference_changed(self, _current, _previous):
+        pedal_id = self.current_pedal_reference_id()
+        self.state["pedalReference"] = pedal_id
+        recommendation = self.last_recommendation
+        if recommendation is None:
+            recommendation = build_recommendation(
+                self.state["genre"],
+                self.connected_chain,
+                self.state["guitarType"],
+                self.state["ampModel"],
+                self.state["guitarProfile"],
+            )
+            self.last_recommendation = recommendation
+        self.render_pedals_tab(recommendation)
+        self.persist_state(silent=True)
 
     def render_rig_setup_tab(self, recommendation):
         self.clear_layout_widgets(self.pedal_cards_grid)
@@ -3867,6 +5424,10 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         if theory_shape in CAGED_SHAPES:
             self.state["theoryShape"] = theory_shape
 
+        pedal_reference = payload.get("pedalReference")
+        if pedal_reference in PEDAL_LIBRARY:
+            self.state["pedalReference"] = pedal_reference
+
         font_preset = payload.get("fontPreset")
         if font_preset in FONT_PRESETS:
             self.state["fontPreset"] = font_preset
@@ -3907,6 +5468,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             "theme": self.state["theme"],
             "theoryScale": self.state.get("theoryScale", "minor_pentatonic"),
             "theoryShape": self.state.get("theoryShape", "g"),
+            "pedalReference": self.state.get("pedalReference", BANK_ORDER[0]),
             "fontPreset": self.state["fontPreset"],
             "fontSize": font_pixels_for_preset(self.state["fontPreset"]),
             "chain": self.state["chain"],
@@ -3929,7 +5491,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             QTabBar::tab:selected {{ background: {theme["tab_selected_bg"]}; color: {theme["tab_selected_fg"]}; font-weight: 700; }}
             QGroupBox {{ border: 1px solid {theme["frame"]}; border-radius: 8px; margin-top: 8px; font-weight: 700; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {theme["group_title"]}; }}
-            QComboBox, QListWidget, QTextEdit, QPushButton, QLineEdit, QTableWidget {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
+            QComboBox, QListWidget, QTextEdit, QPushButton, QToolButton, QLineEdit, QTableWidget {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 6px; padding: 5px; }}
             QFrame#pedalSettingsCard {{ background: {theme["panel"]}; border: 1px solid {theme["frame"]}; border-radius: 8px; }}
             QLabel#pedalCardTitle {{ font-weight: 700; color: {theme["group_title"]}; }}
             QLabel#usualKeysLabel {{ color: {theme.get("positive", "#66d17a")}; font-weight: 700; }}
@@ -3943,6 +5505,8 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.circle_of_fifths.set_theme(theme)
         if hasattr(self, "pentatonic_neck"):
             self.pentatonic_neck.set_theme(theme)
+        if hasattr(self, "pedal_showcase"):
+            self.pedal_showcase.set_theme(theme)
         if hasattr(self, "nashville_table"):
             active_key = self.summary_selected_key or self.summary_best_key
             if not active_key:
@@ -3951,6 +5515,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             self.highlight_nashville_key(active_key, usual_major)
         if hasattr(self, "feedback_limit_label"):
             self.update_feedback_limit_label()
+        self.update_control_box_geometry()
 
 
 def main():

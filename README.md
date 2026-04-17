@@ -11,7 +11,8 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - `automation/`: build scripts for macOS and Windows packaging.
 - `documentation/`: operational docs, changelog, diagrams, and sources.
 - `.git-agent/`: git workflow/bug tracking contract.
-- Root `AGENTS.md`: orchestrates all scoped agents.
+- `research/`: local ad-hoc pedal research agent workspace (via gitignored `AGENTS.md`).
+- Local `AGENTS.md` files (gitignored): orchestrate scoped role ownership and ad-hoc research workflows.
 
 ## What this branch includes
 
@@ -20,7 +21,10 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Genre presets including `Hip Hop`.
 - Guitar mode + guitar profile controls.
 - Amp model selection (`Auto`, Orange, Marshall, Fender Acoustic, Twin, Vox, Mesa).
-- `Builder`, `Rig Setup`, `Theory`, and `Feedback` tabs.
+- `Builder`, `Pedals`, `Rig Setup`, `Theory`, and `Feedback` tabs.
+- `Pedals` tab with selector, close-to-real pedal visual, and detailed configuration/usage guide.
+- Tab flow order: `Pedals` -> `Builder` -> `Rig Setup` -> `Theory` -> `Feedback`.
+- Real pedal image assets sourced from `assets/pedals/` with overlayed knob/slider indicators.
 - Persistent local state in `.pedal_architect_py_state.json`.
 - Adjustable UI `Font Size` preset dropdown (`Small`, `Medium`, `Large`, `XL`) with persisted selection.
 - Resizable split-panel layout so builder/settings columns scale with the window.
@@ -38,7 +42,7 @@ Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recom
 - Theory tab scale chart now supports multiple scales (minor/major pentatonic, minor blues, major scale, natural minor, mixolydian).
 - Additional theory helpers include cadence mapping (`I-IV-V`, `ii-V-I`, `vi-IV-I-V`) and relative-minor guidance.
 - Feedback tab sends JSON payloads to a configurable webhook with persistent anti-spam rate limiting.
-- Donate flow supports PayPal, Venmo, and Zelle from `pyqt_app_config.json`.
+- Donate flow supports PayPal, Venmo, and Zelle from local-only `.secrets/pyqt_app_config.json`.
 
 ## Run
 
@@ -47,7 +51,8 @@ python3 -m pip install -r requirements-pyqt.txt
 python3 pyqt_app.py
 ```
 
-Configure feedback/donate values in `pyqt_app_config.json` before building/distributing.
+Configure feedback/donate values in a local-only file at `.secrets/pyqt_app_config.json` before building/distributing.
+This file is sensitive and intentionally gitignored.
 
 ## Build Contained App
 

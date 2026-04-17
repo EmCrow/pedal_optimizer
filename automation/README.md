@@ -15,3 +15,7 @@
 ## Notes
 - Scripts create timestamped executable backups in `backups/`.
 - PyInstaller spec file is shared from repo root (`PedalArchitect.spec`).
+- Run sensitive guard before push:
+  ```bash
+  ./automation/check_sensitive_files.sh
+  ```

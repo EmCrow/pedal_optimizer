@@ -11,3 +11,13 @@ PedalArchitect.app/
 build/
 dist/
 *.spec
+AGENTS.md
+**/AGENTS.md
+**/agents.md
+*config*.json
+*config*.yaml
+*config*.yml
+*config*.toml
+*config*.ini
+*config*.cfg
+*config*.js
