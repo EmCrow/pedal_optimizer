@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pedal Architect desktop app (PyQt5).
+"""Pedal Architect desktop app (Qt/Python).
 
 Branch: py_app
 """
@@ -22,7 +22,14 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+try:
+    from PyQt5 import QtCore, QtGui, QtWidgets
+    QT_BINDING = "PyQt5"
+except ImportError:
+    from PySide6 import QtCore, QtGui, QtWidgets
+    QT_BINDING = "PySide6"
+    if not hasattr(QtCore, "pyqtSignal"):
+        QtCore.pyqtSignal = QtCore.Signal
 from data.theory_data import CAGED_SHAPES, SCALE_LIBRARY
 from functions.runtime_helpers import (
     clamp as util_clamp,
@@ -32,6 +39,20 @@ from functions.runtime_helpers import (
     to_clock as util_to_clock,
 )
 from ui.theme_presets import THEMES, THEME_PRESET_SPECS
+
+
+def drag_exec(drag, actions, default_action):
+    exec_fn = getattr(drag, "exec_", None) or getattr(drag, "exec", None)
+    if not exec_fn:
+        raise RuntimeError(f"{QT_BINDING} drag API does not provide exec method.")
+    return exec_fn(actions, default_action)
+
+
+def modal_exec(widget):
+    exec_fn = getattr(widget, "exec_", None) or getattr(widget, "exec", None)
+    if not exec_fn:
+        raise RuntimeError(f"{QT_BINDING} modal API does not provide exec method.")
+    return exec_fn()
 
 
 PEDAL_LIBRARY = {
@@ -980,7 +1001,7 @@ class PedalBankListWidget(QtWidgets.QListWidget):
         mime.setData(PEDAL_SOURCE_MIME_TYPE, b"bank")
         mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
         drag.setMimeData(mime)
-        drag.exec_(QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.CopyAction)
+        drag_exec(drag, QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.CopyAction)
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
@@ -1057,7 +1078,7 @@ class ChainListWidget(QtWidgets.QListWidget):
         mime.setData(PEDAL_SOURCE_MIME_TYPE, b"chain")
         mime.setText(PEDAL_LIBRARY.get(pedal_id, ""))
         drag.setMimeData(mime)
-        drag.exec_(QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.MoveAction)
+        drag_exec(drag, QtCore.Qt.CopyAction | QtCore.Qt.MoveAction, QtCore.Qt.MoveAction)
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
@@ -3048,6 +3069,17 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
     def current_scale(self):
         return SCALE_LIBRARY.get(self.scale_key, SCALE_LIBRARY["minor_pentatonic"])
 
+    def target_shape_fret_count(self, scale_key=None):
+        key = scale_key or self.scale_key
+        # Pentatonic/blues boxes are constrained to a 4-fret shape window.
+        if key in {"minor_pentatonic", "major_pentatonic", "minor_blues"}:
+            return 4
+        # Full heptatonic modes/scales need a slightly wider shape window.
+        if key in {"major_scale", "natural_minor", "mixolydian"}:
+            return 5
+        interval_count = len(SCALE_LIBRARY.get(key, {}).get("intervals", []))
+        return 4 if interval_count <= 6 else 5
+
     def update_pattern(self):
         scale = self.current_scale()
         root_pc = pitch_class_for_key_name(self.key_name)
@@ -3057,7 +3089,10 @@ class PentatonicNeckWidget(QtWidgets.QWidget):
         intervals = set(scale.get("intervals", []))
         scale_family = str(scale.get("family", "minor"))
         shape_start, shape_window = caged_window_start(root_fret, self.shape_key, scale_family)
-        shape_end = shape_start + shape_window
+        shape_window = max(1, int(shape_window))
+        desired_shape_frets = self.target_shape_fret_count(self.scale_key)
+        shape_fret_count = max(1, min(shape_window, desired_shape_frets))
+        shape_end = shape_start + shape_fret_count - 1
 
         points = []
         for string_idx, open_pc in enumerate(STANDARD_TUNING_PCS_TOP_TO_BOTTOM):
@@ -5503,7 +5538,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
             dialog.setText(message)
             dialog.setInformativeText("Build order preview shown for the optimized chain.")
             dialog.setIconPixmap(self.build_chain_preview_pixmap(self.state["chain"]))
-            dialog.exec_()
+            modal_exec(dialog)
         else:
             QtWidgets.QMessageBox.information(self, "Optimize", message)
 
@@ -6430,7 +6465,7 @@ def main():
     app = QtWidgets.QApplication([])
     window = PedalArchitectWindow()
     window.show()
-    app.exec_()
+    modal_exec(app)
 
 
 if __name__ == "__main__":

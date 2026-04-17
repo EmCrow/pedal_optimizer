@@ -11,6 +11,7 @@ Assumption:
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,42 @@ BACKUPS_DIR = ROOT / "backups"
 TEMP_VENV_DIR = ROOT / ".build_venv"
 TEMP_WORK_DIR = ROOT / ".pyinstaller_work"
 TEMP_SPEC_DIR = ROOT / ".pyinstaller_spec"
+PYINSTALLER_SPEC = "PyInstaller>=6.4,<7"
+
+
+def python_version_tuple() -> tuple[int, int, int]:
+    return sys.version_info.major, sys.version_info.minor, sys.version_info.micro
+
+
+def macos_major_version() -> int | None:
+    if platform.system().lower() != "darwin":
+        return None
+    ver = platform.mac_ver()[0].strip()
+    if not ver:
+        return None
+    major_str = ver.split(".", 1)[0]
+    try:
+        return int(major_str)
+    except ValueError:
+        return None
+
+
+def is_legacy_macos() -> bool:
+    major = macos_major_version()
+    return major is not None and major < 11
+
+
+def ensure_python_compatibility() -> None:
+    py_major, py_minor, _ = python_version_tuple()
+    if (py_major, py_minor) < (3, 9):
+        raise RuntimeError(
+            "Python 3.9+ is required to build Pedal Architect."
+        )
+    if is_legacy_macos() and (py_major, py_minor) >= (3, 12):
+        raise RuntimeError(
+            "macOS 10.x cannot use Python 3.12+ for this build path. "
+            "Use Python 3.10 or 3.11 on macOS 10.x, or build on macOS 11+."
+        )
 
 
 def info(message: str) -> None:
@@ -37,6 +74,41 @@ def info(message: str) -> None:
 def run(cmd: list[str], *, cwd: Path | None = None) -> None:
     info(" ".join(str(part) for part in cmd))
     subprocess.run(cmd, cwd=str(cwd or ROOT), check=True)
+
+
+def dependency_fallback_sets() -> list[tuple[str, list[str]]]:
+    py_major, py_minor, _ = python_version_tuple()
+    fallback_sets: list[tuple[str, list[str]]] = []
+    if (py_major, py_minor) >= (3, 12):
+        fallback_sets.append(("PySide6 modern stack", ["PySide6>=6.7,<7", PYINSTALLER_SPEC]))
+    else:
+        fallback_sets.append(("PyQt5 legacy stack", ["PyQt5==5.15.10", PYINSTALLER_SPEC]))
+        if not is_legacy_macos():
+            fallback_sets.append(("PySide6 alternate stack", ["PySide6>=6.7,<7", PYINSTALLER_SPEC]))
+    return fallback_sets
+
+
+def install_build_dependencies(venv_python: Path) -> None:
+    run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    try:
+        run([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+        return
+    except subprocess.CalledProcessError:
+        info("Primary dependency install failed; trying fallback dependency sets.")
+
+    last_error: subprocess.CalledProcessError | None = None
+    for label, package_specs in dependency_fallback_sets():
+        try:
+            info(f"Fallback install attempt: {label}")
+            run([str(venv_python), "-m", "pip", "install", *package_specs])
+            info(f"Fallback install succeeded: {label}")
+            return
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            info(f"Fallback install failed: {label}")
+    if last_error:
+        raise last_error
+    raise RuntimeError("Unable to resolve dependency set for this platform/Python combination.")
 
 
 def remove_path(path: Path) -> None:
@@ -124,6 +196,7 @@ def ensure_built_artifact() -> Path:
 
 
 def main() -> int:
+    ensure_python_compatibility()
     if not ENTRYPOINT.exists():
         raise FileNotFoundError(f"Missing entrypoint: {ENTRYPOINT}")
     if not REQUIREMENTS.exists():
@@ -143,7 +216,7 @@ def main() -> int:
 
     try:
         info("Installing build requirements")
-        run([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+        install_build_dependencies(venv_python)
 
         info("Building application")
         build_with_pyinstaller(venv_python)

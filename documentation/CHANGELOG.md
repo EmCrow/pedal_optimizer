@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-17 (installer compatibility hardening)
+- Added dual Qt runtime support in `pyqt_app.py`: prefer `PyQt5` when available, then fall back to `PySide6`.
+- Added compatibility wrappers for drag/modal execution so the same code path works across `PyQt5` and `PySide6`.
+- Updated `requirements-pyqt.txt` to select Qt binding by Python version (`PyQt5` for older Python, `PySide6` for newer Python).
+- Hardened `build_app.py` with:
+  - Python/macOS preflight checks.
+  - `pip/setuptools/wheel` bootstrap upgrade.
+  - fallback dependency install sets when primary requirements resolution fails.
+  - explicit legacy macOS guidance for Python version constraints.
+
 ## 2026-04-17 (py_app_modular build simplification)
 - Added a single cross-platform build entrypoint: `build_app.py`.
 - Build flow now bootstraps its own temporary virtualenv, installs `requirements-pyqt.txt`, packages via PyInstaller, and cleans temporary files automatically.

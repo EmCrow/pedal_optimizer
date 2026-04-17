@@ -1,6 +1,6 @@
 # Pedal Architect (py_app)
 
-Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recommendations.
+Desktop Qt edition of Pedal Architect for offline rig building and tone recommendations.
 
 ## Modular Branch Layout (`py_app_modular`)
 
@@ -51,6 +51,16 @@ python3 -m pip install -r requirements-pyqt.txt
 python3 pyqt_app.py
 ```
 
+Qt runtime selection:
+
+- Python `<3.12` installs `PyQt5` (best for older systems, including macOS 10.x).
+- Python `>=3.12` installs `PySide6` (best for newer Windows/macOS/Linux).
+
+Compatibility note:
+
+- For macOS 10.x, use Python `3.10` or `3.11`.
+- For Windows 10 and modern macOS (including Tahoe), Python `3.12+` is supported through `PySide6`.
+
 Configure feedback/donate values in a local-only file at `.secrets/pyqt_app_config.json` before building/distributing.
 This file is sensitive and intentionally gitignored.
 
@@ -63,7 +73,7 @@ python3 build_app.py
 Build behavior (`build_app.py`):
 
 - Creates a temporary virtual environment (`.build_venv/`).
-- Installs build dependencies from `requirements-pyqt.txt`.
+- Installs build dependencies from `requirements-pyqt.txt` with automatic Qt fallback handling.
 - Runs PyInstaller with bundled `assets/` and `data/`.
 - Backs up previous executable artifacts into `backups/executable_backup_<timestamp>/`
 - Writes the new executable next to `pyqt_app.py`:
