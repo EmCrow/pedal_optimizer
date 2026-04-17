@@ -1112,9 +1112,12 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     PEDAL_SIZE = QtCore.QSize(84, 124)
     PEDAL_JACK_INSET = 6
-    PEDAL_JACK_RADIUS = 3
+    PEDAL_JACK_RADIUS = 4
     PEDAL_ROUTE_PADDING = 2
     JACK_OUTSET = 4
+    CONTROL_BUTTON_SIZE = 18
+    CONTROL_BUTTON_GAP = 3
+    DRAG_FRAME_MS = 12
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1132,6 +1135,10 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         self.theme = THEMES["dark"]
         self.dragging_pedal = None
         self.drag_offset = QtCore.QPoint()
+        self.drag_pending_pos = None
+        self.drag_update_timer = QtCore.QTimer(self)
+        self.drag_update_timer.setSingleShot(True)
+        self.drag_update_timer.timeout.connect(self.flush_drag_position)
         self.link_start = None
         self.preview_link_to = None
         self.guitar_pixmaps = {}
@@ -1308,13 +1315,19 @@ class PedalCanvasWidget(QtWidgets.QWidget):
 
     def pedal_remove_button_rect(self, pedal_id):
         rect = self.pedal_rect(pedal_id)
-        return QtCore.QRect(rect.right() - 17, rect.top() + 4, 13, 13)
+        size = self.CONTROL_BUTTON_SIZE
+        return QtCore.QRect(rect.right() - size - 4, rect.top() + 4, size, size)
+
+    def pedal_connect_button_rect(self, pedal_id, side):
+        rect = self.pedal_rect(pedal_id)
+        size = self.CONTROL_BUTTON_SIZE
+        x = rect.left() + 2 if side == "output" else rect.right() - size - 2
+        y = rect.center().y() - size - (self.CONTROL_BUTTON_GAP // 2)
+        return QtCore.QRect(x, y, size, size)
 
     def pedal_disconnect_button_rect(self, pedal_id, side):
-        rect = self.pedal_rect(pedal_id)
-        if side == "output":
-            return QtCore.QRect(rect.left() + 1, rect.center().y() - 15, 14, 14)
-        return QtCore.QRect(rect.right() - 15, rect.center().y() - 15, 14, 14)
+        rect = self.pedal_connect_button_rect(pedal_id, side)
+        return QtCore.QRect(rect.left(), rect.bottom() + self.CONTROL_BUTTON_GAP, rect.width(), rect.height())
 
     def clamp_pedal_position(self, point):
         min_x, max_x, min_y, max_y = self.pedal_position_bounds()
@@ -1329,26 +1342,44 @@ class PedalCanvasWidget(QtWidgets.QWidget):
                 return pedal_id
         return None
 
-    def jack_hit(self, point, center, radius=8):
+    def jack_hit(self, point, center, radius=11):
         dx = point.x() - center.x()
         dy = point.y() - center.y()
         return (dx * dx + dy * dy) <= (radius * radius)
 
     def find_output_source(self, point):
-        if self.jack_hit(point, self.guitar_output_pos(), 9):
+        if self.jack_hit(point, self.guitar_output_pos(), 13):
             return GUITAR_NODE_ID
         for pedal_id in reversed(self.pedal_ids):
-            if self.jack_hit(point, self.pedal_output_pos(pedal_id), 8):
+            if self.pedal_connect_button_rect(pedal_id, "output").contains(point):
+                return pedal_id
+            if self.jack_hit(point, self.pedal_output_pos(pedal_id), 12):
                 return pedal_id
         return None
 
     def find_input_target(self, point):
-        if self.jack_hit(point, self.amp_input_pos(), 10):
+        if self.jack_hit(point, self.amp_input_pos(), 14):
             return AMP_NODE_ID
         for pedal_id in reversed(self.pedal_ids):
-            if self.jack_hit(point, self.pedal_input_pos(pedal_id), 8):
+            if self.pedal_connect_button_rect(pedal_id, "input").contains(point):
+                return pedal_id
+            if self.jack_hit(point, self.pedal_input_pos(pedal_id), 12):
                 return pedal_id
         return None
+
+    def flush_drag_position(self):
+        if not self.dragging_pedal:
+            self.drag_pending_pos = None
+            return
+        if self.drag_pending_pos is None:
+            return
+        pedal_id = self.dragging_pedal
+        new_pos = self.drag_pending_pos
+        self.drag_pending_pos = None
+        current = self.pedal_positions.get(pedal_id)
+        if current is None or current != new_pos:
+            self.pedal_positions[pedal_id] = new_pos
+            self.update()
 
     def draw_flow_markers(self, painter, points, color, spacing=46):
         if len(points) < 2:
@@ -1435,6 +1466,20 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.drawPath(path)
         if flow_markers and not dashed:
             self.draw_flow_markers(painter, points, line_color)
+
+    def quick_connection_path(self, start, end):
+        stub = 14
+        start_stub = QtCore.QPoint(start.x() - stub, start.y())
+        end_stub = QtCore.QPoint(end.x() + stub, end.y())
+        mid_y = int(round((start_stub.y() + end_stub.y()) / 2.0))
+        return [
+            start,
+            start_stub,
+            QtCore.QPoint(start_stub.x(), mid_y),
+            QtCore.QPoint(end_stub.x(), mid_y),
+            end_stub,
+            end,
+        ]
 
     def segment_intersects_rect(self, p1, p2, rect):
         if p1.x() == p2.x():
@@ -1958,7 +2003,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
         painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
-        painter.setRenderHint(QtGui.QPainter.HighQualityAntialiasing)
+        painter.setRenderHint(QtGui.QPainter.HighQualityAntialiasing, not bool(self.dragging_pedal))
         painter.fillRect(self.rect(), QtGui.QColor(self.theme["canvas_bg"]))
 
         grid_pen = QtGui.QPen(QtGui.QColor(self.theme["canvas_grid"]), 1)
@@ -2028,20 +2073,31 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         painter.drawEllipse(self.amp_input_pos(), 5, 5)
 
         connection_paths = []
-        wire_segments = []
-        for src, dst in self.connections:
-            if src != GUITAR_NODE_ID and src not in self.pedal_ids:
-                continue
-            if dst != AMP_NODE_ID and dst not in self.pedal_ids:
-                continue
-            start = self.guitar_output_pos() if src == GUITAR_NODE_ID else self.pedal_output_pos(src)
-            end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
-            path_points = self.build_connection_path(start, end, src, dst, wire_segments=wire_segments)
-            connection_paths.append(path_points)
-            wire_segments.extend(self.path_segments(path_points))
-
-        for path_points in connection_paths:
-            self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3, flow_markers=True)
+        if self.dragging_pedal:
+            for src, dst in self.connections:
+                if src != GUITAR_NODE_ID and src not in self.pedal_ids:
+                    continue
+                if dst != AMP_NODE_ID and dst not in self.pedal_ids:
+                    continue
+                start = self.guitar_output_pos() if src == GUITAR_NODE_ID else self.pedal_output_pos(src)
+                end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
+                connection_paths.append(self.quick_connection_path(start, end))
+            for path_points in connection_paths:
+                self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3, flow_markers=False)
+        else:
+            wire_segments = []
+            for src, dst in self.connections:
+                if src != GUITAR_NODE_ID and src not in self.pedal_ids:
+                    continue
+                if dst != AMP_NODE_ID and dst not in self.pedal_ids:
+                    continue
+                start = self.guitar_output_pos() if src == GUITAR_NODE_ID else self.pedal_output_pos(src)
+                end = self.amp_input_pos() if dst == AMP_NODE_ID else self.pedal_input_pos(dst)
+                path_points = self.build_connection_path(start, end, src, dst, wire_segments=wire_segments)
+                connection_paths.append(path_points)
+                wire_segments.extend(self.path_segments(path_points))
+            for path_points in connection_paths:
+                self.draw_link(painter, path_points, self.theme["canvas_edge"], width=3, flow_markers=True)
 
         if self.link_start and self.preview_link_to:
             start = self.guitar_output_pos() if self.link_start == GUITAR_NODE_ID else self.pedal_output_pos(self.link_start)
@@ -2093,12 +2149,20 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             painter.drawText(remove_rect, QtCore.Qt.AlignCenter, "x")
 
             for side in ["output", "input"]:
-                btn_rect = self.pedal_disconnect_button_rect(pedal_id, side)
-                painter.setPen(QtGui.QPen(QtGui.QColor("#1d2831"), 1))
-                painter.setBrush(QtGui.QBrush(QtGui.QColor("#f5f7fa")))
-                painter.drawRoundedRect(btn_rect, 3, 3)
-                painter.setPen(QtGui.QColor("#0f1722"))
-                painter.drawText(btn_rect, QtCore.Qt.AlignCenter, "~")
+                connect_rect = self.pedal_connect_button_rect(pedal_id, side)
+                disconnect_rect = self.pedal_disconnect_button_rect(pedal_id, side)
+
+                painter.setPen(QtGui.QPen(QtGui.QColor("#0e5f2c"), 1))
+                painter.setBrush(QtGui.QBrush(QtGui.QColor("#37c96c")))
+                painter.drawRoundedRect(connect_rect, 4, 4)
+                painter.setPen(QtGui.QColor("#ecfff2"))
+                painter.drawText(connect_rect, QtCore.Qt.AlignCenter, "L")
+
+                painter.setPen(QtGui.QPen(QtGui.QColor("#6b1117"), 1))
+                painter.setBrush(QtGui.QBrush(QtGui.QColor("#eb5059")))
+                painter.drawRoundedRect(disconnect_rect, 4, 4)
+                painter.setPen(QtGui.QColor("#fff1f1"))
+                painter.drawText(disconnect_rect, QtCore.Qt.AlignCenter, "-")
 
             face_values = self.normalized_face_values(pedal_id)
             if pedal_id in {"ge7", "eq10"}:
@@ -2158,6 +2222,18 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             return
         click_pos = event.pos()
         for pedal_id in reversed(self.pedal_ids):
+            if self.pedal_connect_button_rect(pedal_id, "output").contains(click_pos):
+                self.link_start = pedal_id
+                self.preview_link_to = click_pos
+                self.update()
+                return
+            if self.pedal_connect_button_rect(pedal_id, "input").contains(click_pos):
+                if self.link_start and self.link_start != pedal_id:
+                    self.connectionCreated.emit(self.link_start, pedal_id)
+                    self.link_start = None
+                    self.preview_link_to = None
+                    self.update()
+                return
             if self.pedal_remove_button_rect(pedal_id).contains(click_pos):
                 self.pedalRemoveRequested.emit(pedal_id)
                 return
@@ -2177,6 +2253,7 @@ class PedalCanvasWidget(QtWidgets.QWidget):
         if pedal_id:
             self.dragging_pedal = pedal_id
             self.drag_offset = click_pos - self.pedal_positions[pedal_id]
+            self.drag_pending_pos = None
         else:
             self.dragging_pedal = None
 
@@ -2187,8 +2264,12 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             return
         if self.dragging_pedal:
             new_pos = self.clamp_pedal_position(event.pos() - self.drag_offset)
-            self.pedal_positions[self.dragging_pedal] = new_pos
-            self.update()
+            current = self.pedal_positions.get(self.dragging_pedal)
+            if current == new_pos and self.drag_pending_pos is None:
+                return
+            self.drag_pending_pos = new_pos
+            if not self.drag_update_timer.isActive():
+                self.drag_update_timer.start(self.DRAG_FRAME_MS)
             return
         super().mouseMoveEvent(event)
 
@@ -2203,6 +2284,9 @@ class PedalCanvasWidget(QtWidgets.QWidget):
             return
         if event.button() == QtCore.Qt.LeftButton and self.dragging_pedal:
             pedal_id = self.dragging_pedal
+            if self.drag_update_timer.isActive():
+                self.drag_update_timer.stop()
+            self.flush_drag_position()
             self.dragging_pedal = None
             self.pedalMoved.emit(pedal_id, self.pedal_positions.get(pedal_id, QtCore.QPoint(18, 18)))
             return
@@ -3778,7 +3862,7 @@ class PedalArchitectWindow(QtWidgets.QMainWindow):
         self.board_canvas = PedalCanvasWidget()
         board_layout.addWidget(self.board_canvas, 1)
         board_hint = QtWidgets.QLabel(
-            "Pedal input is on the right, output on the left. Drag from output to input to cable. Use x to remove a pedal, or ~ buttons to disconnect that side."
+            "Pedal input is on the right, output on the left. Drag from output to input to cable. Use x to remove a pedal, green L side buttons to start/target links, and red - side buttons to disconnect that side."
         )
         board_hint.setWordWrap(True)
         board_layout.addWidget(board_hint)
