@@ -1,32 +1,33 @@
 # How Pedal Architect Works
 
+## Architecture
+- Runtime stack: plain `HTML + CSS + JavaScript` (no framework, offline-first).
+- Entry point: `index.html`.
+- Unlock gate: `gate.js` validates hostname + passkey from `data/access.js` before loading `app.js`.
+- Core tone logic and UI behavior: `app.js`.
+- Embedded offline rule data: `data/config.js`.
+
 ## Runtime Flow
-1. App boots and loads local state (`.pedal_architect_py_state.json`).
-2. UI builds tabs (`Builder`, `Pedals`, `Rig Setup`, `Theory`, `Feedback`).
-3. User selects genre/guitar/amp/theme and builds a connected signal path.
-4. Recommendation engine computes pedal, guitar, and amp settings from:
-   - genre presets
-   - connected pedal order
-   - guitar type/profile
-   - amp model profile
-5. `Rig Setup` renders practical settings and justification text.
-6. `Theory` maps selected key + scale + CAGED shape onto a guitar neck.
-7. Feedback tab can submit structured payloads via configurable webhook.
-8. Pedals tab provides per-pedal visual and configuration deep dives, including RC-30 workflow guidance.
+1. Browser loads `index.html`, `styles.css`, `data/config.js`, `data/access.js`, and `gate.js`.
+2. User unlocks with hostname + passkey; `gate.js` validates using Web Crypto PBKDF2 checks.
+3. After successful unlock, `gate.js` loads `app.js`.
+4. `app.js` initializes selectors (genre, guitar type/profile, amp model), pedal bank, and wrapped chain builder.
+5. Drag/drop + reorder updates chain state and recomputes recommendations.
+6. Recommendation engine applies:
+   - genre preset baseline
+   - order-dependent chain deltas
+   - guitar profile layer
+   - amp profile layer
+7. UI renders:
+   - pedal settings
+   - guitar settings
+   - amp settings
+   - justification notes
+   - bottom rig summary bullets
+8. `Optimize For Me` runs permutation search and selects highest chain score for active pedals.
+9. State persists in browser `localStorage` (`pedal_architect_state_v4`) for offline reuse.
 
-## Data Boundaries
-- `data/`: theory and research-backed JSON datasets consumed by runtime.
-- `functions/`: runtime utility functions and behavior helpers.
-- `ui/`: theme definitions and visual-system configuration.
-- `assets/`: static visual assets.
-- `automation/`: build scripts and platform packaging entry points.
-
-## Build Output
-- Local build script produces `PedalArchitect.app` in repo root.
-- Previous artifacts are backed up into `backups/executable_backup_*`.
-
-## Sensitive Local Config
-- Runtime defaults are embedded in `pyqt_app.py`.
-- Optional feedback/donate overrides should live in ignored local paths:
-  - `.secrets/pyqt_app_config.json` (preferred)
-  - `PEDAL_ARCHITECT_CONFIG` environment variable path
+## Deployment Model
+- Simple run: open `index.html`.
+- Optional app-like install path: PWA-capable browsers can install the app shell experience.
+- No mandatory build step required for core use.

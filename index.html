@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pedal Architect</title>
+    <link rel="stylesheet" href="styles.css?v=25" />
+  </head>
+  <body>
+    <div class="bg-shape shape-one"></div>
+    <div class="bg-shape shape-two"></div>
+    <div class="bg-noise"></div>
+
+    <section id="accessGate" class="access-gate panel">
+      <div class="access-content">
+        <p class="eyebrow">Device-Locked Access</p>
+        <h1>Pedal Architect Secure Unlock</h1>
+        <p class="hero-copy">
+          Enter your laptop hostname and passkey. Passkeys are generated from hostname + your local
+          master key, so each laptop can have a unique unlock key.
+        </p>
+        <form id="accessForm" class="access-form" autocomplete="off">
+          <label for="hostnameInput">Laptop Hostname</label>
+          <input id="hostnameInput" name="hostname" type="text" spellcheck="false" required />
+          <label for="passkeyInput">Passkey</label>
+          <input id="passkeyInput" name="passkey" type="password" spellcheck="false" required />
+          <label class="remember-wrap" for="rememberPasskey">
+            <input id="rememberPasskey" name="rememberPasskey" type="checkbox" />
+            <span>Remember passkey on this laptop</span>
+          </label>
+          <button id="unlockBtn" class="btn primary" type="submit">Unlock Pedal Architect</button>
+        </form>
+        <p class="access-note">
+          Tip: when opening from a local file, your browser cannot always detect your laptop name.
+          Use the same hostname you used when creating the key.
+        </p>
+        <p id="accessStatus" class="access-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <main id="appShell" class="app-shell" hidden>
+      <header class="hero">
+        <p class="eyebrow">Offline Tone Designer</p>
+        <h1>Pedal Architect</h1>
+        <p class="hero-copy">
+          Build your board, wire the chain, and get settings mapped to your style, guitar profile,
+          and amp voice.
+        </p>
+      </header>
+
+      <section class="controls panel" aria-label="Rig controls">
+        <div class="control-block style-block">
+          <label for="genreSelect">Style</label>
+          <select id="genreSelect" aria-label="Select music style"></select>
+        </div>
+
+        <fieldset class="control-block radio-block">
+          <legend>Guitar</legend>
+          <label class="radio-line" for="guitarElectricRadio">
+            <input id="guitarElectricRadio" type="radio" name="guitarType" value="electric" checked />
+            <span>Electric</span>
+          </label>
+          <label class="radio-line" for="guitarAcousticRadio">
+            <input id="guitarAcousticRadio" type="radio" name="guitarType" value="acoustic" />
+            <span>Acoustic</span>
+          </label>
+        </fieldset>
+
+        <fieldset class="control-block radio-block" id="guitarProfileBox">
+          <legend>Guitar Controls</legend>
+          <div class="profile-options" id="electricProfileGroup">
+            <label class="radio-line" for="profileTwoKnob">
+              <input
+                id="profileTwoKnob"
+                type="radio"
+                name="guitarProfile"
+                value="electric_2_knob_toggle"
+                checked
+              />
+              <span>2 knob electric</span>
+            </label>
+            <label class="radio-line" for="profileFourKnob">
+              <input id="profileFourKnob" type="radio" name="guitarProfile" value="electric_4_knob_toggle" />
+              <span>4 knob electric</span>
+            </label>
+          </div>
+          <div class="acoustic-profile-line" id="acousticProfileLine">Acoustic (Taylor ES2)</div>
+        </fieldset>
+
+        <div class="control-block amp-block">
+          <label for="ampSelect">Amp</label>
+          <select id="ampSelect" aria-label="Select amp model"></select>
+        </div>
+
+        <div class="control-actions">
+          <button id="optimizeBtn" class="btn primary" type="button">Optimize For Me</button>
+          <button id="saveBtn" class="btn" type="button">Save Offline</button>
+          <button id="settingsBtn" class="settings-cog" type="button" aria-label="Open settings">⚙</button>
+        </div>
+
+        <div id="settingsMenu" class="settings-menu" hidden>
+          <div class="settings-row">
+            <label for="fontSizeSelect">Font Size</label>
+            <select id="fontSizeSelect" aria-label="Select font size"></select>
+          </div>
+          <div class="settings-row">
+            <label for="themeSelect">Color Scheme</label>
+            <select id="themeSelect" aria-label="Select color scheme"></select>
+          </div>
+          <div class="settings-row settings-row-end">
+            <button id="closeSettingsBtn" class="btn" type="button">Close</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tabs-nav panel" role="tablist" aria-label="Rig workspace tabs">
+        <button class="tab-btn active" type="button" role="tab" data-tab-target="pedals" aria-selected="true">
+          Pedals
+        </button>
+        <button class="tab-btn" type="button" role="tab" data-tab-target="builder" aria-selected="false">
+          Builder
+        </button>
+        <button class="tab-btn" type="button" role="tab" data-tab-target="rig" aria-selected="false">
+          Rig Setup
+        </button>
+        <button class="tab-btn" type="button" role="tab" data-tab-target="theory" aria-selected="false">
+          Theory
+        </button>
+        <button class="tab-btn" type="button" role="tab" data-tab-target="feedback" aria-selected="false">
+          Feedback
+        </button>
+      </section>
+
+      <section id="tabPedals" class="tab-pane active" role="tabpanel">
+        <section class="pedals-grid">
+          <article class="panel pedals-col selector-col">
+            <h2>Pedal Selector</h2>
+            <div id="pedalSelector" class="pedal-selector-list" aria-label="Select pedal"></div>
+          </article>
+
+          <article class="panel pedals-col visual-col">
+            <h2>Pedal Visual</h2>
+            <div id="pedalShowcase" class="pedal-showcase"></div>
+          </article>
+
+          <article class="panel pedals-col details-col">
+            <h2>Pedal Guide</h2>
+            <pre id="pedalDetails" class="pedal-details" aria-live="polite"></pre>
+          </article>
+        </section>
+      </section>
+
+      <section id="tabBuilder" class="tab-pane" role="tabpanel" hidden>
+        <section class="builder-grid">
+          <aside class="panel builder-bank-panel">
+            <h2>Pedal Bank</h2>
+            <div id="pedalBank" class="pedal-bank"></div>
+            <h3>Active Pedals</h3>
+            <div id="activeChain" class="active-chain-list"></div>
+          </aside>
+
+          <section class="panel board-panel">
+            <h2>Board Canvas</h2>
+            <div id="boardCanvas" class="board-canvas" aria-label="Board canvas">
+              <svg id="boardCableLayer" class="board-cable-layer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+              <div id="boardNodes" class="board-nodes"></div>
+            </div>
+            <div class="chain-meta">
+              <span id="chainScore" class="score-pill">Tone Match: --</span>
+              <span id="chainSummary" class="chain-summary"></span>
+            </div>
+          </section>
+        </section>
+
+        <section class="builder-actions-row">
+          <button id="cleanUpBtn" class="btn" type="button">Clean Up Layout</button>
+          <button id="autoWireBtn" class="btn" type="button">Auto Wire</button>
+          <button id="clearCablesBtn" class="btn" type="button">Clear Cables</button>
+          <button id="resetBtn" class="btn" type="button">Reset Chain</button>
+        </section>
+      </section>
+
+      <section id="tabRig" class="tab-pane" role="tabpanel" hidden>
+        <section class="rig-grid">
+          <article class="panel rig-row rig-row-preview">
+            <section class="rig-preview-card">
+              <h3>Guitar</h3>
+              <pre id="rigGuitarPreview" class="plain-output"></pre>
+            </section>
+            <section class="rig-preview-card">
+              <h3>Amp</h3>
+              <pre id="rigAmpPreview" class="plain-output"></pre>
+            </section>
+          </article>
+
+          <article class="panel rig-row">
+            <h2>Pedal Settings</h2>
+            <div id="rigPedalCards" class="rig-pedal-grid"></div>
+            <p id="rigPedalEmpty" class="empty-setting">
+              No connected signal chain yet. Add pedals and cable them from guitar to amp.
+            </p>
+          </article>
+
+          <article class="panel rig-row rig-details-row">
+            <section class="settings-group">
+              <h3 class="settings-group-title">Guitar Settings</h3>
+              <div id="guitarSettingsOutput" class="settings-group-body"></div>
+            </section>
+            <section class="settings-group">
+              <h3 class="settings-group-title">Amp Settings</h3>
+              <div id="ampSettingsOutput" class="settings-group-body"></div>
+            </section>
+            <section class="settings-group">
+              <h3 class="settings-group-title">Justification</h3>
+              <div id="guidanceList" class="settings-group-body guidance-list"></div>
+            </section>
+          </article>
+
+          <article class="panel rig-row">
+            <h2>Rig Summary</h2>
+            <div id="summaryOutput" class="summary-output"></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="tabTheory" class="tab-pane" role="tabpanel" hidden>
+        <section class="theory-grid">
+          <article class="panel theory-card circle-card">
+            <h2>Circle of Fifths</h2>
+            <div id="circleOfFifths" class="circle-wrap"></div>
+            <p id="circleHint" class="panel-caption"></p>
+          </article>
+
+          <article class="panel theory-card nashville-card">
+            <h2>Nashville Number Chart</h2>
+            <p id="nashvilleHint" class="panel-caption"></p>
+            <p id="usualKeys" class="usual-keys"></p>
+            <div class="nashville-table-wrap">
+              <table id="nashvilleTable" class="nashville-table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>1</th>
+                    <th>2m</th>
+                    <th>3m</th>
+                    <th>4</th>
+                    <th>5</th>
+                    <th>6m</th>
+                    <th>7dim</th>
+                  </tr>
+                </thead>
+                <tbody id="nashvilleTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel theory-card scale-card">
+            <h2>Scale + CAGED Chart</h2>
+            <div class="theory-controls-row">
+              <div class="control-block compact">
+                <label for="scaleTypeSelect">Scale</label>
+                <select id="scaleTypeSelect"></select>
+              </div>
+              <div class="control-block compact">
+                <label for="cagedShapeSelect">CAGED Shape</label>
+                <select id="cagedShapeSelect"></select>
+              </div>
+            </div>
+            <p id="scaleHint" class="panel-caption"></p>
+            <div id="neckChart" class="neck-chart"></div>
+            <pre id="keyToolkit" class="theory-toolkit"></pre>
+          </article>
+
+          <article class="panel theory-card playbook-card">
+            <h2>Style Playbook</h2>
+            <pre id="stylePlaybook" class="theory-toolkit"></pre>
+          </article>
+
+          <article class="panel theory-card crazy-card">
+            <h2>Creative Theory</h2>
+            <button id="crazyBtn" class="btn" type="button">Lets get Crazy</button>
+            <div class="crazy-grid">
+              <pre id="crazyProgression" class="theory-toolkit"></pre>
+              <pre id="crazyScale" class="theory-toolkit"></pre>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section id="tabFeedback" class="tab-pane" role="tabpanel" hidden>
+        <section class="feedback-grid">
+          <article class="panel feedback-panel">
+            <h2>Feedback</h2>
+            <form id="feedbackForm" class="feedback-form" novalidate>
+              <label for="feedbackName">Name</label>
+              <input id="feedbackName" name="name" type="text" placeholder="Name (optional)" />
+
+              <label for="feedbackEmail">Email</label>
+              <input id="feedbackEmail" name="email" type="email" placeholder="Email (optional)" />
+
+              <label for="feedbackRating">Rating</label>
+              <select id="feedbackRating" name="rating">
+                <option value="5">5 - Excellent</option>
+                <option value="4">4 - Good</option>
+                <option value="3">3 - Okay</option>
+                <option value="2">2 - Needs work</option>
+                <option value="1">1 - Rough</option>
+              </select>
+
+              <label for="feedbackType">Type</label>
+              <select id="feedbackType" name="type">
+                <option value="tone">Tone Recommendation</option>
+                <option value="ui">UI / UX</option>
+                <option value="feature">Feature Request</option>
+                <option value="bug">Bug Report</option>
+                <option value="general">General</option>
+              </select>
+
+              <label for="feedbackMessage">Message</label>
+              <textarea
+                id="feedbackMessage"
+                name="message"
+                rows="8"
+                placeholder="Tell us what worked, what did not, and what to improve."
+              ></textarea>
+
+              <div class="feedback-actions">
+                <button id="feedbackSubmitBtn" class="btn primary" type="submit">Submit Feedback</button>
+                <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
+              </div>
+            </form>
+            <p id="feedbackLimitInfo" class="feedback-limit-info"></p>
+          </article>
+
+          <article class="panel donate-panel">
+            <h2>Support Development</h2>
+            <p class="panel-caption">Choose a method and open/send directly:</p>
+            <div class="donate-row">
+              <select id="donateMethod">
+                <option value="paypal">PayPal</option>
+                <option value="venmo">Venmo</option>
+                <option value="zelle">Zelle</option>
+              </select>
+              <button id="donateBtn" class="btn" type="button">Donate</button>
+            </div>
+            <pre id="donateDetails" class="theory-toolkit"></pre>
+          </article>
+        </section>
+      </section>
+
+      <footer class="footer-note">
+        Fully offline after load. Presets and tone rules are stored in this app.
+      </footer>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="data/config.js?v=6"></script>
+    <script src="data/access.js?v=1"></script>
+    <script src="gate.js?v=11"></script>
+  </body>
+</html>

@@ -2,23 +2,23 @@
 
 ```mermaid
 flowchart LR
-    U[User Input] --> B[Builder Tab]
-    U --> R[Rig Setup Tab]
-    U --> T[Theory Tab]
-    U --> F[Feedback Tab]
+    U[User Opens index.html] --> G[Unlock Gate gate.js]
+    G -->|Reads| A[data/access.js]
+    G -->|Passkey verified| APP[Load app.js]
+    APP -->|Reads| C[data/config.js]
 
-    B --> C[Connected Chain Resolver]
-    C --> E[Recommendation Engine]
+    APP --> B[Builder UI]
+    APP --> S[Rig Settings Tab]
+    APP --> R[Rig Summary Tab]
+
+    B --> D[Drag/Drop Chain State]
+    D --> O[Order Lab Permutation Search]
+    D --> E[Recommendation Engine]
+    O --> E
+    C --> E
+    E --> S
     E --> R
 
-    D1[data/theory_data.py] --> T
-    D2[data/*.json research] --> E
-    U1[ui/theme_presets.py] --> B
-    U1 --> R
-    U1 --> T
-    U1 --> F
-    F --> W[Webhook JSON Sender]
-
-    A[automation scripts] --> P[PyInstaller Build]
-    P --> APP[PedalArchitect.app]
+    APP --> L[localStorage Persist/Load]
+    APP --> GV[Guitar Visual + Amp Block Render]
 ```

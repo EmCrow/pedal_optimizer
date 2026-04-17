@@ -1,82 +1,115 @@
-# Pedal Architect (py_app)
+# Pedal Architect
 
-Desktop PyQt5 edition of Pedal Architect for offline rig building and tone recommendations.
+Offline-ready drag-and-drop pedalboard app for guitar tone setup.
 
-## Modular Branch Layout (`py_app_modular`)
+## What it does
 
-- `data/`: research-backed datasets and theory JSON consumed by runtime.
-- `functions/`: reusable runtime logic helpers.
-- `ui/`: theme presets and visual-system configuration.
-- `assets/`: static images and media.
-- `automation/`: build scripts for macOS and Windows packaging.
-- `documentation/`: operational docs, changelog, diagrams, and sources.
-- `.git-agent/`: git workflow/bug tracking contract.
-- `research/`: local ad-hoc pedal research agent workspace (via gitignored `AGENTS.md`).
-- Local `AGENTS.md` files (gitignored): orchestrate scoped role ownership and ad-hoc research workflows.
-
-## What this branch includes
-
-- `pyqt_app.py` with drag/drop pedal bank -> signal chain + reorder support.
-- `Optimize For Me` chain optimizer with full permutation search for selected pedals.
-- Genre presets including `Hip Hop`.
-- Guitar mode + guitar profile controls.
-- Amp model selection (`Auto`, Orange, Marshall, Fender Acoustic, Twin, Vox, Mesa).
-- `Builder`, `Pedals`, `Rig Setup`, `Theory`, and `Feedback` tabs.
-- `Pedals` tab with selector, close-to-real pedal visual, and detailed configuration/usage guide.
-- Tab flow order: `Pedals` -> `Builder` -> `Rig Setup` -> `Theory` -> `Feedback`.
-- Real pedal image assets sourced from `assets/pedals/` with overlayed knob/slider indicators.
-- Persistent local state in `.pedal_architect_py_state.json`.
-- Adjustable UI `Font Size` preset dropdown (`Small`, `Medium`, `Large`, `XL`) with persisted selection.
-- Resizable split-panel layout so builder/settings columns scale with the window.
-- Drag pedals from bank to active chain and drag active pedals back to bank to remove.
-- Visual board canvas with draggable pedal graphics, guitar image node, and amp node.
-- Pedal jack orientation is fixed: input on the right, output on the left.
-- Guitar-to-pedal-to-amp cabling is explicit; only the connected path from guitar into amp is used for final recommendations.
-- Pedal cards include `x` remove and side `~` disconnect buttons for quick edits.
-- `Clean Up Layout` arranges connected pedals in a right-to-left horizontal signal row first, then wraps.
-- Color scheme presets: `Dark`, `Light`, `Sunset`, `Ocean`, `Prism (Floyd)`, `Brown Sound (VH)`, and `Paisley Prairie`.
-- Global top controls (including `Style`) stay visible while switching tabs.
-- Amp node uses brand-adjacent color treatment per selected amp model.
-- Rig Setup tab contains pedal settings cards (wrap every 5), Guitar/Amp/Justification columns, and Rig Summary.
-- Theory tab contains Circle of Fifths + selectable Nashville chart + key-aware CAGED scale neck visual.
-- Theory tab scale chart now supports multiple scales (minor/major pentatonic, minor blues, major scale, natural minor, mixolydian).
-- Additional theory helpers include cadence mapping (`I-IV-V`, `ii-V-I`, `vi-IV-I-V`) and relative-minor guidance.
-- Feedback tab sends JSON payloads to a configurable webhook with persistent anti-spam rate limiting.
-- Donate flow supports PayPal, Venmo, and Zelle from local-only `.secrets/pyqt_app_config.json`.
+- Drag pedals into your signal chain and reorder them.
+- Chain view wraps to multiple rows (no horizontal scrolling).
+- Includes your pedals: `BOSS CS-3`, `BOSS SD-1`, `BOSS BD-2`, `BOSS DS-1`, `BOSS GE-7`, `10-band EQ`, `BOSS CH-1`, `BOSS DD-3`, and `RC-30 Loop Station`.
+- Fixed amp node at the end of chain.
+- Genre selector (`Metal`, `Rock`, `Classic Rock`, `Pop`, `Country`, `Hip Hop`, `Blues`).
+- Guitar type selector (`Electric`, `Acoustic`).
+- Guitar control selector with profile-aware settings:
+  - `Taylor Acoustic (ES2 Bass/Treble)`
+  - `Electric 2 Knob + Toggle`
+  - `Electric 4 Knob + Toggle`
+- Taylor acoustic profile intentionally leaves output volume to player control for stage feedback management.
+- Amp selector (`Auto`, `Orange Rockerverb MKIII`, `Marshall JCM800 2203`, `Fender Acoustic 100`, `Fender Twin Reverb`, `Vox AC30`, `Mesa/Boogie Dual Rectifier`).
+- Shows recommended pedal and amp settings based on both genre and your current chain order.
+- `Order Lab` exhaustively checks every possible pedal order for your active pedal set and recommends the best chain.
+- Under the amp panel, each style includes heard-chord progressions, capo-5 shape progressions, open-shape mapping, and G-shape pentatonic fret-position solo direction.
+- Pedal graphics update knob and slider positions to mirror current recommended settings.
+- GE-7 and 10-band EQ placement now includes explicit on-page justification when they are adjacent or intentionally separated.
+- `Optimize For Me` auto-builds a recommended chain for the selected genre.
+- Saves your latest setup in browser storage for offline reuse.
 
 ## Run
 
-```bash
-python3 -m pip install -r requirements-pyqt.txt
-python3 pyqt_app.py
-```
-
-Configure feedback/donate values in a local-only file at `.secrets/pyqt_app_config.json` before building/distributing.
-This file is sensitive and intentionally gitignored.
-
-## Build Contained App
+1. Generate or update a device key entry (hostname + passkey):
 
 ```bash
-./build_py_app.sh
+python3 .secrets/device_keygen.py --hostname "<your-laptop-hostname>" --label "<friendly-name>"
 ```
 
-Build behavior:
+2. Open `index.html` in a browser.
+3. At unlock prompt, enter the same hostname and generated passkey.
+4. No install step and no internet required after files are local.
 
-- Backs up previous executable artifacts into `backups/executable_backup_<timestamp>/`
-- Writes the new executable next to `pyqt_app.py`:
-  - `PedalArchitect.app`
+## Device lock (hostname + secret key)
 
-## Backup Naming
+- `index.html` now opens to a secure unlock gate.
+- Access is validated against hashed host entries in `data/access.js`.
+- Optional passkey persistence is available via `Remember passkey on this laptop`.
+- Per-laptop passkeys are deterministically derived from:
+  - local `.secrets/device_secrets.json` master key
+  - local owner key
+  - target hostname
+- Key generation helper is local-only and gitignored:
+  - `.secrets/device_keygen.py`
 
-Backups use:
+Add/update an authorized laptop:
 
-- `<project_name>_<branch>_<YYYY-MM-DD_HHMM>`
+```bash
+python3 .secrets/device_keygen.py --hostname "studio-mac.local" --label "Studio Mac"
+```
 
-Example:
+Print only (do not update access policy):
 
-- `pedal_config_py_app_2026-04-16_1038`
+```bash
+python3 .secrets/device_keygen.py --hostname "studio-mac.local" --print-only
+```
 
-## Branch note
+## Secure package (local-only key)
 
-- `index.html` is not used in this branch.
-- The web implementation lives on the `web_app` branch.
+- Local passkey file: `.secrets/pedal_passkey.txt` (git-ignored).
+- Encrypted binary archive output: `secure_package/*.tar.gz.enc`.
+- Checksum output: `secure_package/*.tar.gz.enc.sha256`.
+
+Create encrypted package:
+
+```bash
+mkdir -p .secrets secure_package
+chmod 700 .secrets
+openssl rand -base64 48 > .secrets/pedal_passkey.txt
+chmod 600 .secrets/pedal_passkey.txt
+
+ts=$(date +%Y%m%d_%H%M%S)
+tar -czf "secure_package/pedal_config_${ts}.tar.gz" \
+  --exclude='./.git' --exclude='./backups' --exclude='./secure_package' --exclude='./.secrets' .
+openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -salt \
+  -in "secure_package/pedal_config_${ts}.tar.gz" \
+  -out "secure_package/pedal_config_${ts}.tar.gz.enc" \
+  -pass file:.secrets/pedal_passkey.txt
+shasum -a 256 "secure_package/pedal_config_${ts}.tar.gz.enc" \
+  > "secure_package/pedal_config_${ts}.tar.gz.enc.sha256"
+rm -f "secure_package/pedal_config_${ts}.tar.gz"
+```
+
+Decrypt package:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 \
+  -in secure_package/<archive>.tar.gz.enc \
+  -pass file:.secrets/pedal_passkey.txt \
+  | tar -xzf - -C /path/to/restore
+```
+
+## Data notes
+
+Preset behavior is based on embedded rule data in `data/config.js` so recommendations work offline.
+
+The recommendation logic combines:
+- Official control layouts for CS-3 / SD-1 / BD-2 / DS-1 / GE-7 / CH-1 / DD-3 / RC-30.
+- Official pedal-order guidance from BOSS.
+- Official EQ placement guidance from BOSS and 10-band frequency structure from MXR M108S documentation.
+- Practical genre voicing heuristics (inferred from those references).
+
+## Files
+
+- `index.html` - layout and controls
+- `styles.css` - UI theme, responsive layout, pedal visuals
+- `gate.js` - hostname/passkey unlock flow and app boot loading
+- `app.js` - drag/drop logic, recommendation engine, offline save
+- `data/config.js` - pedal library, genre presets, amp models, guitar profiles, chain-order rules
+- `data/access.js` - hashed hostname access policy used by the unlock gate
